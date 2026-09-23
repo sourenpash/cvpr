@@ -1,0 +1,29 @@
+{
+  "num_dof": 24,
+  "num_bodies": 25,
+  "total_mass_kg": 30.325,
+  "hip_pitch_to_ankle_roll_m_straight": 0.59854,
+  "pelvis_height_straight_legs_feet_flat_m": 0.74256,
+  "sole_below_ankle_roll_m": 0.055,
+  "dex3_mount_xyz": [
+    0.08,
+    0.0,
+    0.0
+  ],
+  "hand_point_offset_left": [
+    0.2185,
+    -0.025,
+    0.0
+  ],
+  "hand_point_offset_right": [
+    0.2185,
+    0.025,
+    0.0
+  ],
+  "vr_head_point_offset": [
+    0.0,
+    0.0,
+    0.32
+  ],
+  "wrist_mass_with_dex3_kg": 1.0213
+}

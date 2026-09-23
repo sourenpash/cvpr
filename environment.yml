@@ -1,0 +1,38 @@
+# Lightweight *development* environment for this repo on macOS / any CPU box.
+#
+# Purpose: asset authoring (URDF/MJCF), motion-data conversion, motion-lib FK
+# checks, checkpoint surgery, unit tests, plotting. It deliberately does NOT
+# include Isaac Sim / Isaac Lab or the `gear_sonic[training]` extras: training
+# only runs on the Linux + NVIDIA GPU box (see PLAN.md, Phase 5).
+#
+#   conda env create -f environment.yml
+#   conda activate sonic
+#
+# Re-create with conda-forge only if your ~/.condarc lists channels that fail to resolve:
+#   conda env create -f environment.yml --override-channels -c conda-forge
+name: sonic
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11        # Isaac Lab's Python; keeps local code paths identical to the training box
+  - git-lfs            # repo ships meshes/ONNX as LFS objects
+  - uv
+  - pip
+  - pip:
+      # gear_sonic base deps (numpy==1.26.4, scipy, torch, joblib, easydict, loguru, tqdm)
+      - -e ./gear_sonic
+      # motion-lib (Humanoid_Batch) import-time deps not declared in gear_sonic base deps
+      - lxml
+      - open3d
+      - rich
+      - hydra-core
+      - omegaconf
+      # asset validation / data processing
+      - mujoco
+      - pyyaml
+      - pandas
+      - huggingface_hub
+      # dev tooling (tests + lint as used by lint.sh)
+      - pytest
+      - ruff
+      - black

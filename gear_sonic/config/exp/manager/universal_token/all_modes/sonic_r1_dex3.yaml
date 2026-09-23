@@ -1,0 +1,174 @@
+# @package _global_
+# SONIC for Unitree R1 (24 DOF) + Dex3-1 hands - 3 encoders (robot, teleop, SMPL).
+# Recipe = sonic_v1_1 (robot-heading-normalized targets + wrist-pose augmentation), which is
+# the variant built for model-generated hand targets. Every embodiment-specific value below
+# is mirrored from gear_sonic/utils/embodiment/r1_spec.py (tests assert they stay in sync).
+#
+# Data paths are given on the command line, e.g.
+#   ++manager_env.commands.motion.motion_lib_cfg.motion_file=data/motion_lib_r1/S1
+#   ++manager_env.commands.motion.motion_lib_cfg.smpl_motion_file=data/smpl_filtered
+# Warm start from the surgically-initialised G1 checkpoint (scripts/r1/surgery_g1_to_r1_checkpoint.py):
+#   ++algo.config.pretrained_model.path=r1_init/last.pt
+
+defaults:
+  - /algo: ppo_im_phc
+  - /manager_env: base_env
+  - /callbacks/read_eval
+  - /callbacks/im_resample
+  - /aux_losses: universal_token/g1_recon_and_all_latent
+  - override /trainer: trl_ppo_aux
+  - override /actor_critic: universal_token/all_mlp_v1
+  - override /manager_env/observations/tokenizer: unitoken_all_noz_heading
+  - override /manager_env/observations/policy: local_dir_hist
+  - override /manager_env/observations/critic: privileged_mf_hist
+  - override /manager_env/events: tracking/level0_4
+  - override /manager_env/terminations: tracking/base_adaptive_strict_ori_foot_xyz
+  - override /manager_env/rewards: tracking/local_feet_acc_energy_5pt
+
+use_manager_env: true
+
+exp_base: ${hydra:runtime.choices.exp}
+exp_var: test
+experiment_name: ${exp_base}_${exp_var}
+experiment_dir: ${base_dir}/${project_name}/${experiment_name}-${timestamp}
+
+num_envs: 4096
+project_name: TRL_R1_Track
+
+actor_prop_history_length: 10
+actor_actions_history_length: 10
+critic_prop_history_length: 10
+critic_actions_history_length: 10
+
+manager_env:
+  config:
+    robot:
+      type: r1_dex3
+    terrain_type: trimesh
+
+  rewards:
+    feet_acc:
+      weight: -2.5e-6
+    anti_shake_ang_vel:
+      params:
+        body_names: ["left_wrist_roll_link", "right_wrist_roll_link", "head_yaw_link"]
+    tracking_vr_2wrists_local_ori:
+      params:
+        body_names: ["left_wrist_roll_link", "right_wrist_roll_link"]
+    undesired_contacts:
+      params:
+        sensor_cfg:
+          body_names:
+            - "^(?!left_ankle_roll_link$)(?!right_ankle_roll_link$)(?!left_wrist_roll_link$)(?!right_wrist_roll_link$)(?!left_elbow_link$)(?!right_elbow_link$)(?!left_hand_.*)(?!right_hand_.*).+$"
+
+  terminations:
+    ee_body_pos:
+      params:
+        body_names:
+          - "left_ankle_roll_link"
+          - "right_ankle_roll_link"
+          - "left_wrist_roll_link"
+          - "right_wrist_roll_link"
+
+  events:
+    randomize_rigid_body_mass:
+      params:
+        asset_cfg:
+          body_names: ".*wrist_roll.*|torso_link"
+
+  observations:
+    tokenizer:
+      # Isaac Lab DOF indices of the wrist joints fed to the SMPL encoder (G1: 6 wrist DOF -> R1: 2).
+      joint_pos_multi_future_wrist_for_smpl:
+        params:
+          joints_idx: [22, 23]
+
+  commands:
+    motion:
+      # Hand grasp point = wrist_roll_link + Dex3 mount (0.080) + G1-equivalent 0.1385 beyond palm base.
+      vr_3point_body: ["left_wrist_roll_link", "right_wrist_roll_link", "torso_link"]
+      vr_3point_body_offset: [[0.2185, -0.025, 0.0], [0.2185, 0.025, 0.0], [0.0, 0.0, 0.32]]
+      reward_point_body: ["torso_link", "left_wrist_roll_link", "right_wrist_roll_link"]
+      reward_point_body_offset: [[0.0, 0.0, 0.45], [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+      body_names:
+        [
+          "pelvis",
+          "left_hip_roll_link",
+          "left_knee_link",
+          "left_ankle_roll_link",
+          "right_hip_roll_link",
+          "right_knee_link",
+          "right_ankle_roll_link",
+          "torso_link",
+          "left_shoulder_roll_link",
+          "left_elbow_link",
+          "left_wrist_roll_link",
+          "right_shoulder_roll_link",
+          "right_elbow_link",
+          "right_wrist_roll_link",
+        ]
+      num_future_frames: 10
+      dt_future_ref_frames: 0.1
+      smpl_num_future_frames: 10
+      smpl_dt_future_ref_frames: 0.02
+      cat_upper_body_poses: true
+      cat_upper_body_poses_prob: 0.5
+      freeze_frame_aug: true
+      teleop_sample_prob_when_smpl: 0.5
+      randomize_wrist_poses: true
+
+      motion_lib_cfg:
+        robot_type: r1_dex3
+        # MuJoCo DOF indices of the wrist joints for randomize_wrist_poses (R1: wrist roll only).
+        wrist_mujoco_dof_indices: [18, 23]
+        adaptive_sampling:
+          adp_samp_failure_rate_max_over_mean: 200
+        motion_file: null # REQUIRED on the command line (R1 motion_lib PKL directory)
+        smpl_motion_file: dummy # override with data/smpl_filtered for real SMPL-encoder training
+        smpl_y_up: true
+        asset:
+          assetFileName: "r1_dex3.xml"
+
+algo:
+  config:
+    empty_cache_every_n_ppo_epoch: -1
+    num_steps_per_env: 24
+    use_clampped_std: true
+    std_clamp_min: 0.001
+    std_clamp_max: 0.5
+    max_grad_norm: 0.1
+    actor:
+      backbone:
+        reencode_smpl_g1_recon: true
+        encoders:
+          g1:
+            inputs: ["command_multi_future_nonflat", "motion_anchor_ori_heading_mf_nonflat"]
+          teleop:
+            inputs:
+              [
+                "command_multi_future_lower_body",
+                "vr_3point_local_target",
+                "vr_3point_local_orn_target",
+                "motion_anchor_ori_heading",
+              ]
+          smpl:
+            inputs:
+              [
+                "smpl_joints_multi_future_local_nonflat",
+                "smpl_root_ori_heading_multi_future",
+                "joint_pos_multi_future_wrist_for_smpl",
+              ]
+        decoders:
+          g1_kin:
+            outputs: ["command_multi_future_nonflat", "motion_anchor_ori_heading_mf_nonflat"]
+          g1_dyn:
+            params:
+              module_config_dict:
+                layer_config:
+                  hidden_dims: [4096, 4096, 2048, 2048, 1024, 1024, 512, 512]
+
+    critic:
+      backbone:
+        module_config_dict:
+          layer_config:
+            hidden_dims: [4096, 4096, 2048, 2048, 1024, 1024, 512, 512]
