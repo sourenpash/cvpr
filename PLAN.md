@@ -102,7 +102,18 @@ Task IDs (M = Mac-side, G = GPU-box) are referenced from §5.
   decoder and critic tensor present with matching shapes. Console log
   `logs_rl/console/teleop_stage_a_s0.log`. Launch detached (`setsid nohup … &`) so a
   closing terminal or agent session cannot kill it; Isaac Sim ignores SIGTERM (stop with
-  `kill -KILL`).
+  `kill -KILL`). It ran 250 iterations (`r1_init/teleop_a_it250.pt`); its training curves drifted
+  down while the adaptive sampler concentrated (mean segment failure rate 0.68 -> 0.15), so
+  progress is now measured with uniform evaluation (`PeriodicEvalCallback`, W&B `eval/`).
+  **Teleop Stage A2** (`sonic_r1_dex3_teleop_stage_a2`, W&B `m01c6sgc`; `4080i32e` was restarted to add per-group eval rates; the first launch `34g9bnba` crashed at its first eval: `smpl_sim`'s package init -> `mujoco.viewer` -> `glfw` cffi clashes with Isaac Sim's bundled cffi, now bypassed in `PeriodicEvalCallback`; 1024 envs) runs from
+  that checkpoint on `data/motion_lib_r1/A2` = contact-corrected S0 (472) + 200 planner
+  clips (1.2 h, D14), with VR target noise, evaluating at iteration 1 and every 500.
+  **Baseline eval (iteration 1, the 250-iteration teleop policy, training terminations):
+  success 76.5 % overall, 89.8 % on mocap clips but 45.0 % on planner-generated walking**
+  (the generator gap of 2604.17335); MPJPE-L 30.1 mm, VR 3-point 23.9 mm.
+  Console log `logs_rl/console/teleop_stage_a2.log`. Stage B (robustness,
+  `sonic_r1_dex3_teleop_robust.yaml`, D15) is prepared. Open items and the literature behind
+  each fix: `docs/r1/DEMO_READINESS.md`.
 - [ ] **G7** Evaluation incl. EE-tracking metrics and MuJoCo sim-to-sim (§5.G7)
 - [ ] **G8** ONNX export + `docs/r1/INTERFACE.md` (§5.G8)
 
@@ -155,6 +166,7 @@ wrist joint; one measurement on the robot settles both projects.
 | `observations/terms/joint_pos_multi_future_wrist_for_smpl.yaml` | Isaac Lab wrist DOF indices `[23..28]` | preset override `[22, 23]` |
 | `motion.yaml`, `terminations/ee_body_pos*`, `rewards/anti_shake_ang_vel`, `rewards/tracking_vr_2wrists_local_ori`, `rewards/undesired_contacts`, `events/level0_4` | body names / regexes | all overridden in `sonic_r1_dex3.yaml` |
 | `commands.py:4198-4218` (`ForceTrackingCommand`, 6×17 Jacobian) | G1 arm joint lists | **not on our path**; would need R1 lists if force tracking is ever enabled |
+| `im_eval_callback.py` (VR 3-point eval subset) | `left/right_wrist_yaw_link` by name | last arm link present (`wrist_yaw`, else `wrist_roll`); G1 unchanged |
 | `data_process/convert_soma_csv_to_motion_lib.py` | hard-coded G1 axes | use `transfer_g1_motion_lib_to_r1.py` instead (accepts the same CSVs) |
 
 ### 3.4 Network shapes that change (drives M6)
@@ -425,6 +437,18 @@ caveat (position tracked strongly; orientation reduced to palm-normal).
   latent-alignment losses, no SMPL data. The decoder keeps its pretrained size (the warm start
   is the point); the critic (39M, training only) is unchanged. The G1 planner's output maps to
   the R1's lower-body joints by name, as the training data does — to verify in G7.
+- **D14 Planner-in-the-loop data and contact-corrected transfer** — SONIC's VR_3PT mode feeds
+  the teleop encoder planner-generated legs, and a tracker trained only on clean mocap breaks
+  on generator artifacts (2604.17335: 0.23 -> ~0.99 success with the generator in the loop).
+  `scripts/r1/planner_loop.py` ports the deployed planner loop; `generate_planner_motions.py`
+  drives it with Quest-like stick scripts and transfers the G1 output like BONES-SEED. The
+  transfer now pins stance feet and grounds soles per frame (contacts detected on the G1
+  source; Kovar 2002, PHUMA 2510.26236, PBHC 2506.12851, ProtoMotions): S0 frames > 2 cm under
+  ground 7.5 % -> 0 %, stance skating 1.25 -> 0.61 cm/s. `--no-contact-fix` = old behaviour.
+- **D15 Robustness as a separate stage** — measured R1 leg armature (unitree_rl_mjlab #51),
+  PD gains x0.9-1.1 and 0-15 ms actuation latency (`delayed_actions.py`) are applied as a
+  fine-tune from A2 (`sonic_r1_dex3_teleop_robust.yaml`) so their effect on `eval/` is
+  measurable; joint friction waits until its Isaac Sim 5.1 units are verified.
 
 ## 7. Risks
 
