@@ -56,7 +56,12 @@ Task IDs (M = Mac-side, G = GPU-box) are referenced from §5.
 
 ### GPU-box (open) — do in order
 
-- [ ] **G1** Environment + G1 baseline smoke test (§5.G1)
+- [ ] **G1** Environment + G1 baseline smoke test (§5.G1). Local preflight on `asblab`
+  (2026-09-24): created conda env `sonic` from `environment.yml`; 30 R1 tests pass and
+  `pip check` is clean. Host ROS sets `PYTHONPATH` to Python 3.12 packages, so run tests
+  with `env -u PYTHONPATH`. Isaac Lab and training extras are not installed; G1 remains open.
+  This host has an RTX 2080 Ti (11 GB) and TITAN V (12 GB), below the 24 GB training target;
+  the `sonic` env's PyTorch build lacks TITAN V kernels.
 - [ ] **G2** Isaac Lab ordering verification for R1 (§5.G2) — *blocks everything after it*
 - [ ] **G3** Data: download Bones-SEED + SONIC v1.1 weights/SMPL; transfer to R1; curate subsets (§5.G3)
 - [ ] **G4** R1 env bring-up: `num_envs=1`, replay, 4096-env throughput (§5.G4)
@@ -159,7 +164,7 @@ pip install -e "gear_sonic/[training]"
 python check_environment.py --training
 python -m pytest gear_sonic/tests/r1 -q          # Mac-side tests must also pass here
 # 3) Baseline
-python download_from_hf.py --sonic-v1-1           # sonic_v1_1/last.pt + config + planner
+python download_from_hf.py --sample               # sample_data/robot_filtered + smpl_filtered
 python gear_sonic/train_agent_trl.py +exp=manager/universal_token/all_modes/sonic_v1_1 \
   num_envs=16 headless=True ++algo.config.num_learning_iterations=5 \
   ++manager_env.commands.motion.motion_lib_cfg.motion_file=sample_data/robot_filtered \
