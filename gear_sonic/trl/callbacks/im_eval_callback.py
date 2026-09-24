@@ -555,11 +555,14 @@ class ImEvalCallback(TrainerCallback):
                     "right_ankle_roll_link",
                 ]
                 # NOTE use torso_link instead of head for vr_3points_subset_names
-                vr_3points_subset_names = [
-                    "torso_link",
-                    "left_wrist_yaw_link",
-                    "right_wrist_yaw_link",
-                ]
+                # The last arm link: wrist_yaw on G1, wrist_roll on robots without it (R1).
+                def _wrist(side):
+                    for link in (f"{side}_wrist_yaw_link", f"{side}_wrist_roll_link"):
+                        if link in body_names:
+                            return link
+                    return f"{side}_wrist_yaw_link"
+
+                vr_3points_subset_names = ["torso_link", _wrist("left"), _wrist("right")]
                 other_upper_bodies_subset_names = [
                     "pelvis",
                     "left_shoulder_roll_link",

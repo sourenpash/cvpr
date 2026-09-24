@@ -15,6 +15,7 @@ defaults:
   - /callbacks/read_eval
   - /callbacks/im_resample
   - /callbacks/rollout_video # W&B videos: reference | policy, palm targets (BruteForce format)
+  - /callbacks/periodic_eval # every 500 it: all clips once, success rate/MPJPE -> W&B eval/
   - override /trainer: trl_ppo_aux
   - override /actor_critic: universal_token/teleop_mlp_v1
   - override /manager_env/observations/tokenizer: unitoken_teleop_heading

@@ -1,0 +1,5 @@
+periodic_eval:
+  # Every clip once, deterministic policy, env terminations; logged to W&B under eval/.
+  _target_: gear_sonic.trl.callbacks.periodic_eval_callback.PeriodicEvalCallback
+  eval_frequency: 500
+  first_iteration: null

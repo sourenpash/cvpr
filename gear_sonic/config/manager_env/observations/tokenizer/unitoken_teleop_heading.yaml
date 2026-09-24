@@ -18,3 +18,17 @@ motion_anchor_ori_heading:
     _target_: isaaclab.utils.noise.AdditiveUniformNoiseCfg
     n_min: -0.05
     n_max: 0.05
+
+# Headset/controller tracking jitter and calibration error (CLONE 2506.08931 perturbs the VR
+# head target; OmniH2O 2406.08858 randomizes teleop input): small per-step noise on the 3 points.
+vr_3point_local_target:
+  noise:
+    _target_: isaaclab.utils.noise.AdditiveUniformNoiseCfg
+    n_min: -0.01
+    n_max: 0.01
+
+vr_3point_local_orn_target:
+  noise:
+    _target_: isaaclab.utils.noise.AdditiveUniformNoiseCfg
+    n_min: -0.02
+    n_max: 0.02
