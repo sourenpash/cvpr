@@ -24,7 +24,7 @@ LINK_RENAMES = {
 }
 ROOT_BODY = "pelvis"
 TORSO_BODY = "torso_link"
-HEAD_BODY = "head_yaw_link"  # fixed in the policy model; used for anti-shake reward (like H2)
+HEAD_BODY = "head_yaw_link"  # fixed URDF link; Isaac Lab fuses it into TORSO_BODY
 LEFT_EE_BODY = "left_wrist_roll_link"
 RIGHT_EE_BODY = "right_wrist_roll_link"
 LEFT_FOOT_BODY = "left_ankle_roll_link"
@@ -219,7 +219,7 @@ TRACKED_BODY_NAMES = [
     "right_wrist_roll_link",
 ]
 EE_TERMINATION_BODIES = [LEFT_FOOT_BODY, RIGHT_FOOT_BODY, LEFT_EE_BODY, RIGHT_EE_BODY]
-ANTI_SHAKE_BODIES = [LEFT_EE_BODY, RIGHT_EE_BODY, HEAD_BODY]
+ANTI_SHAKE_BODIES = [LEFT_EE_BODY, RIGHT_EE_BODY, TORSO_BODY]
 UPPER_BODY_EVENT_BODY_REGEX = ".*wrist_roll.*|torso_link"
 # Bodies whose contacts are NOT penalised: feet, end-effectors, elbows (as G1) plus the Dex3
 # links, which are the intended contact surface for manipulation.

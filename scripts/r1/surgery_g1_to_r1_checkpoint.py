@@ -2,7 +2,7 @@
 """Checkpoint surgery: initialise an R1 (24-DOF) SONIC policy from G1 (29-DOF) weights.
 
 Every tensor whose shape already matches is copied verbatim (token space / FSQ, all hidden
-layers, the G1 and teleop encoders, the kinematic decoder, most of the critic). Tensors whose
+layers, the teleop encoder, most of the critic). Tensors whose
 shape depends on the embodiment are *gathered* along the mismatched axes using index maps
 derived from the two observation layouts (``layout.json`` written by
 ``++dump_layout_dir=...``):
@@ -10,8 +10,8 @@ derived from the two observation layouts (``layout.json`` written by
 * action rows / std          : joint-name map, Isaac Lab DOF order (all 24 R1 joints exist on G1)
 * policy / critic obs columns: per-term maps (joint-indexed terms by name, history-major)
 * decoder input columns      : identity for ``token_flattened`` + policy-obs map
-* encoder input columns      : time-major concat of the encoder's input terms; only the
-                               ``joint_pos_multi_future_wrist_for_smpl`` term changes (6 -> 2)
+* encoder input columns      : time-major concat of the encoder's input terms
+* kinematic decoder rows    : time-major concat of its output terms
 * tokenizer-wide vectors     : term-order concat (same rule)
 
 Nothing is invented: because R1's joints are a subset of G1's, every target index has a
@@ -48,8 +48,9 @@ DOF_TERMS = {
     "joint_pos_rel",
     "joint_vel_rel",
 }
-# [pos: T x dof][vel: T x dof], frame-major, Isaac Lab DOF order.
-DOF_MULTI_FUTURE_POSVEL_TERMS = {"command_multi_future"}
+# [pos: T x dof][vel: T x dof], Isaac Lab DOF order. The nonflat observation
+# reshapes this same vector to (T, 2*dof) without changing its flat order.
+DOF_MULTI_FUTURE_POSVEL_TERMS = {"command_multi_future", "command_multi_future_nonflat"}
 # (T, len(joints_idx)) frame-major; joints_idx are Isaac Lab DOF indices.
 WRIST_TERMS = {"joint_pos_multi_future_wrist_for_smpl", "joint_pos_multi_future_wrist_for_soma"}
 
@@ -60,9 +61,12 @@ class IndexMap:
 
     name: str
     tgt_to_src: np.ndarray
+    source_len: int | None = None
 
     @property
     def src_len(self) -> int:
+        if self.source_len is not None:
+            return self.source_len
         return int(self.tgt_to_src.max()) + 1 if len(self.tgt_to_src) else 0
 
     @property
@@ -188,27 +192,25 @@ class MapBuilder:
             src_off += int(np.prod(s["dims"]))
         return np.array(out, dtype=np.int64)
 
-    def _encoder_map(self, enc: str, inputs: list[str]) -> np.ndarray:
-        """Time-major concat: for each frame t, the inputs' per-frame dims in order."""
+    def _temporal_concat_map(self, module: str, inputs: list[str]) -> np.ndarray:
+        """Map per-frame concatenated encoder inputs or decoder outputs."""
         src_pf, tgt_pf, per_frame_maps, T = [], [], [], None
         for name in inputs:
             sd, td = self.src.tokenizer_dims(name), self.tgt.tokenizer_dims(name)
             if len(td) >= 2:
+                if sd[0] != td[0]:
+                    raise ValueError(f"{module}: input {name} has different temporal dimensions")
                 T_i, ds, dt = td[0], int(np.prod(sd[1:])), int(np.prod(td[1:]))
             else:  # 1-D input broadcast to every frame is not expected; treat as T=1
                 T_i, ds, dt = 1, int(np.prod(sd)), int(np.prod(td))
             T = T_i if T is None else T
             if T_i != T:
-                raise ValueError(f"encoder {enc}: inputs have different temporal dims")
-            if name in WRIST_TERMS:
-                m_full = self._wrist_map(sd, td)  # frame-major over all frames
-                m_pf = m_full[:dt]  # per-frame column pattern (frame 0)
-            else:
-                if ds != dt:
-                    raise ValueError(
-                        f"encoder {enc}: input {name} dims differ ({ds}->{dt}) with no rule"
-                    )
-                m_pf = np.arange(dt, dtype=np.int64)
+                raise ValueError(f"{module}: inputs have different temporal dims")
+            m_full = self._term_map(name, sd, td)
+            m_pf = m_full[:dt]
+            for frame in range(T_i):
+                if not np.array_equal(m_full[frame * dt : (frame + 1) * dt], frame * ds + m_pf):
+                    raise ValueError(f"{module}: input {name} is not frame-local")
             src_pf.append(ds)
             tgt_pf.append(dt)
             per_frame_maps.append(m_pf)
@@ -221,21 +223,39 @@ class MapBuilder:
         return np.array(out, dtype=np.int64)
 
     def _build(self):
-        self.maps["action"] = IndexMap("action", self.joint_map.copy())
+        self.maps["action"] = IndexMap("action", self.joint_map.copy(), len(self.src.joint_names))
         for group in ("policy", "critic"):
             m = self._group_map(group)
             if m is not None:
-                self.maps[f"group:{group}"] = IndexMap(f"group:{group}", m)
+                src_size = sum(int(np.prod(d["dims"])) for d in self.src.group_terms(group))
+                self.maps[f"group:{group}"] = IndexMap(f"group:{group}", m, src_size)
         tok_dim = int(self.src.raw.get("token_dim", 0)) * int(self.src.raw.get("max_num_tokens", 0))
         pol = self.maps.get("group:policy")
         if pol is not None and tok_dim > 0:
             self.maps["decoder_input"] = IndexMap(
-                "decoder_input", np.concatenate([np.arange(tok_dim), tok_dim + pol.tgt_to_src])
+                "decoder_input",
+                np.concatenate([np.arange(tok_dim), tok_dim + pol.tgt_to_src]),
+                tok_dim + pol.src_len,
             )
         for enc, inputs in self.tgt.raw.get("encoder_inputs", {}).items():
             if inputs:
+                src_size = sum(int(np.prod(self.src.tokenizer_dims(n))) for n in inputs)
                 self.maps[f"encoder:{enc}"] = IndexMap(
-                    f"encoder:{enc}", self._encoder_map(enc, inputs)
+                    f"encoder:{enc}",
+                    self._temporal_concat_map(f"encoder {enc}", inputs),
+                    src_size,
+                )
+        for dec, outputs in self.tgt.raw.get("decoder_outputs", {}).items():
+            if outputs == ["action"]:
+                self.maps[f"decoder_output:{dec}"] = IndexMap(
+                    f"decoder_output:{dec}", self.joint_map.copy(), len(self.src.joint_names)
+                )
+            elif outputs:
+                src_size = sum(int(np.prod(self.src.tokenizer_dims(n))) for n in outputs)
+                self.maps[f"decoder_output:{dec}"] = IndexMap(
+                    f"decoder_output:{dec}",
+                    self._temporal_concat_map(f"decoder {dec}", outputs),
+                    src_size,
                 )
         # tokenizer-wide vector (term order)
         order = self.tgt.raw.get("tokenizer_term_order", [])
@@ -245,7 +265,7 @@ class MapBuilder:
                 sd, td = self.src.tokenizer_dims(name), self.tgt.tokenizer_dims(name)
                 out.extend(src_off + self._term_map(name, sd, td))
                 src_off += int(np.prod(sd))
-            self.maps["tokenizer"] = IndexMap("tokenizer", np.array(out, dtype=np.int64))
+            self.maps["tokenizer"] = IndexMap("tokenizer", np.array(out, dtype=np.int64), src_off)
 
 
 # --------------------------------------------------------------------------------------
@@ -275,7 +295,10 @@ def _candidates(maps: dict[str, IndexMap], src_len: int, tgt_len: int, key: str)
         return cands
     # disambiguate by parameter name
     prefs = []
-    if re.search(r"decoders\.", key):
+    dec_match = re.search(r"decoders\.(\w+)", key)
+    if dec_match and re.search(r"(?:\.|^)(?:module|net)\.\d+\.(?:weight|bias)$", key):
+        prefs.append("decoder_output:" + dec_match.group(1))
+    if dec_match:
         prefs.append("decoder_input")
     enc_match = re.search(r"encoders\.(\w+)", key)
     if enc_match:
@@ -388,6 +411,10 @@ def main() -> None:
         )
     out_ck["optimizer_state_dict"] = None
     out_ck["lr_scheduler_state_dict"] = None
+    # PPOTrainer.load_checkpoint prints this field even for a weights-only warm start.
+    from types import SimpleNamespace
+
+    out_ck["state"] = SimpleNamespace(global_step=0)
     out_ck["surgery"] = {
         "src": args.src,
         "tgt": args.tgt,
@@ -404,7 +431,7 @@ def main() -> None:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.with_suffix(".surgery_report.json").write_text(json.dumps(summary, indent=2))
     if args.dry_run:
-        print("dry run: nothing written")
+        print("dry run: report written, checkpoint not written")
         return
     torch.save(out_ck, out)
     print(f"wrote {out}")

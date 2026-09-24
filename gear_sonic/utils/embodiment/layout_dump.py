@@ -47,9 +47,13 @@ def build_layout(env, config, policy) -> dict:
             terms.append({"name": name, "dims": _to_list(dim), "history": max(hist, 1)})
         groups[group] = terms
 
-    backbone = getattr(policy, "backbone", None)
+    backbone = getattr(policy, "actor_module", None)
     enc_cfg = config.algo.config.actor.backbone.get("encoders", {})
     encoder_inputs = {k: list(v.get("inputs", [])) for k, v in enc_cfg.items() if hasattr(v, "get")}
+    dec_cfg = config.algo.config.actor.backbone.get("decoders", {})
+    decoder_outputs = {
+        k: list(v.get("outputs", [])) for k, v in dec_cfg.items() if hasattr(v, "get")
+    }
     tok_cfg = config.manager_env.observations.get("tokenizer", {})
     wrist_cfg = (
         tok_cfg.get("joint_pos_multi_future_wrist_for_smpl", {}) if hasattr(tok_cfg, "get") else {}
@@ -70,6 +74,7 @@ def build_layout(env, config, policy) -> dict:
         },
         "tokenizer_term_order": list(env.config["obs"]["group_obs_names"].get("tokenizer", [])),
         "encoder_inputs": encoder_inputs,
+        "decoder_outputs": decoder_outputs,
         "proprioception_features": list(
             getattr(backbone, "proprioception_features", ["actor_obs"])
         ),

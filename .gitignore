@@ -230,6 +230,7 @@ sonic_release/
 # GPU-box artefacts of the R1 workflow (see PLAN.md §5)
 /layouts/
 /r1_init/
+/sonic_v1_1/
 # Conda / pip local state
 .conda/
 *.egg-info/

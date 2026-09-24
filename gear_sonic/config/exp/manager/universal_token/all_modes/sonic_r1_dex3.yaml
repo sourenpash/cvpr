@@ -51,7 +51,7 @@ manager_env:
       weight: -2.5e-6
     anti_shake_ang_vel:
       params:
-        body_names: ["left_wrist_roll_link", "right_wrist_roll_link", "head_yaw_link"]
+        body_names: ["left_wrist_roll_link", "right_wrist_roll_link", "torso_link"]
     tracking_vr_2wrists_local_ori:
       params:
         body_names: ["left_wrist_roll_link", "right_wrist_roll_link"]

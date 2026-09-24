@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 from pathlib import Path
 import sys
@@ -82,6 +83,7 @@ def test_maps(layouts):
     src, tgt = layouts
     b = surgery.MapBuilder(src, tgt)
     assert b.maps["action"].tgt_to_src.tolist() == [0, 2, 4]
+    assert b.maps["action"].src_len == len(SRC_JOINTS)
     # policy: gravity(6) | joint_pos hist-major (H x n) | actions (H x n)
     pol = b.maps["group:policy"].tgt_to_src
     n_s, n_t = 5, 3
@@ -187,11 +189,60 @@ def test_surgery_gathers_weights(layouts):
     assert len(rep.copied) == 1 and len(rep.gathered) == 6
 
 
+def test_nonflat_future_and_kinematic_decoder_follow_source_order(layouts):
+    """The nonflat view reshapes a pos-block/vel-block vector without interleaving it."""
+    src, tgt = copy.deepcopy(layouts)
+    src.raw["tokenizer_term_dims"].update(
+        {"command_multi_future_nonflat": [T, 2 * len(SRC_JOINTS)], "anchor": [T, 2]}
+    )
+    tgt.raw["tokenizer_term_dims"].update(
+        {"command_multi_future_nonflat": [T, 2 * len(TGT_JOINTS)], "anchor": [T, 2]}
+    )
+    for layout in (src, tgt):
+        layout.raw["encoder_inputs"]["g1"] = ["command_multi_future_nonflat", "anchor"]
+        layout.raw["decoder_outputs"] = {"g1_kin": ["command_multi_future_nonflat", "anchor"]}
+    b = surgery.MapBuilder(src, tgt)
+    future = b.maps["encoder:g1"].tgt_to_src
+    assert np.array_equal(future, b.maps["decoder_output:g1_kin"].tgt_to_src)
+    expected = []
+    for frame in range(T):
+        base = frame * (2 * len(SRC_JOINTS) + 2)
+        expected += [base + j for j in (0, 2, 4)]
+        expected += [base + len(SRC_JOINTS) + j for j in (0, 2, 4)]
+        expected += [base + 2 * len(SRC_JOINTS), base + 2 * len(SRC_JOINTS) + 1]
+    assert future.tolist() == expected
+    src_sd = {
+        "actor_module.decoders.g1_kin.module.8.bias": torch.arange(len(SRC_JOINTS) * 2 * T + 2 * T)
+    }
+    tgt_sd = {
+        "actor_module.decoders.g1_kin.module.8.bias": torch.zeros(len(TGT_JOINTS) * 2 * T + 2 * T)
+    }
+    report = surgery.SurgeryReport()
+    out = surgery.surgery(src_sd, tgt_sd, b.maps, report)
+    assert out[next(iter(out))].tolist() == expected
+    assert report.kept_init == {}
+
+
 def test_missing_target_joint_is_rejected(layouts):
     src, tgt = layouts
     bad = surgery.Layout(raw=dict(tgt.raw), joint_names=["a", "zz"], num_actions=2)
     with pytest.raises(ValueError, match="missing from source"):
         surgery.MapBuilder(src, bad)
+
+
+def test_source_size_includes_unselected_last_joint(layouts):
+    src, tgt = copy.deepcopy(layouts)
+    tgt.joint_names = ["a", "c"]
+    tgt.raw["groups"]["policy"][1]["dims"] = [2 * H]
+    tgt.raw["groups"]["policy"][2]["dims"] = [2 * H]
+    tgt.raw["groups"]["critic"][0]["dims"] = [2 * T * 2]
+    tgt.raw["groups"]["critic"][2]["dims"] = [2 * H]
+    tgt.raw["tokenizer_term_dims"]["joint_pos_multi_future_wrist_for_smpl"] = [T, 1]
+    tgt.raw["wrist_for_smpl_joints_idx"] = [1]
+    b = surgery.MapBuilder(src, tgt)
+    assert b.maps["action"].src_len == 5
+    assert b.maps["group:policy"].src_len == 6 + 2 * H * 5
+    assert b.maps["group:critic"].src_len == 2 * T * 5 + 6 + H * 5
 
 
 def test_ambiguous_shape_is_kept_init(layouts):

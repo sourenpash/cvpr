@@ -21,13 +21,15 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import runpy
 import sys
 
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 
-from gear_sonic.envs.manager_env.robots.r1_ordering import R1_ISAACLAB_JOINTS  # noqa: E402
 from gear_sonic.utils.embodiment import r1_spec  # noqa: E402
+
+ORDERING = runpy.run_path(str(REPO / "gear_sonic/envs/manager_env/robots/r1_ordering.py"))
 
 
 def main() -> int:
@@ -40,8 +42,8 @@ def main() -> int:
 
     live_joints = list(layout["joint_names_isaaclab"])
     live_bodies = list(layout["body_names_isaaclab"])
-    expected_bodies = list(R1_ISAACLAB_JOINTS)  # root + DOF bodies, inferred order
-    expected_joints = [b.replace("_link", "_joint") for b in expected_bodies[1:]]
+    expected_bodies = list(ORDERING["R1_ISAACLAB_JOINTS"])
+    expected_joints = [r1_spec.MJCF_JOINT_ORDER[i] for i in ORDERING["R1_MUJOCO_TO_ISAACLAB_DOF"]]
 
     ok = True
     if live_joints != expected_joints:
@@ -53,14 +55,13 @@ def main() -> int:
     else:
         print(f"joint order OK ({len(live_joints)} DOF)")
 
-    dof_bodies_live = [live_bodies[0]] + [j.replace("_joint", "_link") for j in live_joints]
     if live_bodies[0] != r1_spec.ROOT_BODY:
         ok = False
         print(f"ROOT BODY MISMATCH: live={live_bodies[0]!r} expected={r1_spec.ROOT_BODY!r}")
-    if dof_bodies_live != expected_bodies:
+    if live_bodies != expected_bodies:
         ok = False
         print("DOF-BODY ORDER MISMATCH:")
-        print("  live    :", dof_bodies_live)
+        print("  live    :", live_bodies)
         print("  inferred:", expected_bodies)
     else:
         print(f"DOF body order OK ({len(expected_bodies)} bodies)")
@@ -69,13 +70,16 @@ def main() -> int:
         ok = False
         print(f"ACTION DIM MISMATCH: live={layout['num_actions']} expected={r1_spec.NUM_DOF}")
 
-    # Fixed links that configs reference must exist as bodies.
-    for name in (
-        r1_spec.HEAD_BODY,
-        r1_spec.LEFT_PALM_BODY,
-        r1_spec.RIGHT_PALM_BODY,
-        r1_spec.TORSO_BODY,
-    ):
+    # Isaac Lab fuses fixed URDF links (head and palms) into their parent bodies.
+    # Check the articulation bodies used by the experiment preset.
+    required_bodies = set(
+        r1_spec.TRACKED_BODY_NAMES
+        + r1_spec.VR_3POINT_BODY
+        + r1_spec.REWARD_POINT_BODY_3PT
+        + r1_spec.EE_TERMINATION_BODIES
+        + r1_spec.ANTI_SHAKE_BODIES
+    )
+    for name in sorted(required_bodies):
         if name not in live_bodies:
             ok = False
             print(f"BODY MISSING in Isaac Lab articulation: {name}")
