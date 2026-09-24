@@ -66,19 +66,43 @@ Task IDs (M = Mac-side, G = GPU-box) are referenced from §5.
   `num_envs=1` produced `layouts/r1_dex3/layout.json`; the verifier printed `RESULT: OK`
   for 24 joints and 25 bodies. Isaac Lab fuses the fixed head and palm links into parents;
   the anti-shake reward now names the live torso body. This check passed before training.
-- [ ] **G3** Data: downloaded SONIC v1.1 weights and two sample G1 walking motions;
-  both transferred to R1 with no clamp/velocity flags. Full Bones-SEED/SMPL data and
-  curation remain (§5.G3). The `sourenp` Hugging Face account currently gets HTTP 403 for
-  BONES-SEED's gated files; its separate dataset access must be granted.
+- [ ] **G3** Data: BONES-SEED gated access granted. Downloaded the 23 GB G1 archive and
+  metadata on `asblab`; `curate_bones_s0.py` selected 500 non-mirrored stand, idle, slow/normal
+  walk, arm gesture, and reach clips. G1→R1 transfer kept **472/500 (94.4%, 1.261 h)** at
+  30 Hz with 5% clamp/velocity thresholds; clamps are dominated by shoulders/elbows, not
+  legs. Downloaded NVIDIA's 31 GB split SMPL archive and selectively extracted all **472**
+  matching SMPL PKLs. Names match exactly and durations differ by at most 0.0334 s.
+  Aligned three-encoder training check, S1/S2 curation, and replay remain (§5.G3–G4).
 - [ ] **G4** R1 env bring-up: 16-env random-init trial completed 20 iterations
   (~2.9 s/iteration, ~4.9 GB RTX VRAM). Warm-start sample runs completed at 256 envs
   (~4.2 s/iteration, 5.9 GB), 512 envs (~5.7 s/iteration, 6.9 GB), and 1024 envs
-  (~8.6 s/iteration, 8.5 GB). Replay check and full-scale throughput remain (§5.G4).
+  (~8.6 s/iteration, 8.5 GB). The 3-point tracking reward now scores palms instead of
+  wrist origins. A 3-iteration warm-start smoke run completed and synced 132 metrics to the
+  new W&B project `sourenpashangpour-university-of-toronto/TRL_R1_Track`; the training
+  entrypoint now flushes W&B before Isaac's forced exit. 2026-09-24: the R1 now uses G1's
+  default pose and per-joint action scale (D10); the Dex3 visual no longer overlaps the stock
+  fist (wrist mesh cut at the mount, D11); training logs BruteForce-style videos to W&B (D12).
+  512 envs: 2.4 s rollout + 3.5 s PPO update per iteration (the 91M-parameter nets, not the
+  simulator, dominate). Replay check and full-scale throughput remain (§5.G4).
 - [x] **G5** Live G1/R1 layouts → surgery → `r1_init/last.pt` (§5.G5). The report shows
   69 tensors copied, 11 gathered, zero template-init; R1 loaded it at step 0 and completed
   five 16-env learning iterations. The checkpoint is local and ignored by Git.
-- [ ] **G6** Fine-tuning stages A → B → C (§5.G6). Sample-only warm-start smoke runs pass;
-  the curated S0/S1/S2 datasets are still needed for a meaningful training run.
+- [ ] **G6** Fine-tuning stages A → B → C (§5.G6). Stage A v1 (`stage_a_s0`, W&B
+  `rhldriet`, 512 envs, S0) stopped at iteration ~459/500 when its parent agent session
+  ended; it plateaued (time-out 0.36, foot-position terminations 0.51, 3-point reward 0.42,
+  rising action std) because the G1 weights ran on R1-specific default pose / action scales
+  (leg targets shifted and 2.3–3.7× smaller). A/B from `r1_init` with D10, 120 iterations:
+  time-out 0.62 vs 0.37, foot terminations 0.20 vs 0.45, 3-point reward 0.74 vs 0.45,
+  body-position reward 0.47 vs 0.31 (iterations 90–120, same data and envs). **Stage A v2**
+  (`stage_a_s0_g1param`, W&B `lezotaeg`) ran 100 iterations from `r1_init/last.pt` with
+  D10–D12, then was stopped for the teleop-only model (D13); its iteration-100 checkpoint is
+  `r1_init/stage_a_v2_it100.pt`. **Teleop Stage A** (`sonic_r1_dex3_teleop_stage_a_s0`, W&B
+  `2xvwnnrh`, 1024 envs, S0, no SMPL) runs from that checkpoint; the layout check
+  (`layouts/r1_dex3_teleop/template.pt` vs the checkpoint) found every teleop encoder,
+  decoder and critic tensor present with matching shapes. Console log
+  `logs_rl/console/teleop_stage_a_s0.log`. Launch detached (`setsid nohup … &`) so a
+  closing terminal or agent session cannot kill it; Isaac Sim ignores SIGTERM (stop with
+  `kill -KILL`).
 - [ ] **G7** Evaluation incl. EE-tracking metrics and MuJoCo sim-to-sim (§5.G7)
 - [ ] **G8** ONNX export + `docs/r1/INTERFACE.md` (§5.G8)
 
@@ -97,7 +121,8 @@ Task IDs (M = Mac-side, G = GPU-box) are referenced from §5.
 | End effector body | `*_wrist_yaw_link` + `[0.18, ∓0.025, 0]` | `*_wrist_roll_link` + `[0.2185, ∓0.025, 0]` (Dex3 mount at 0.080 + G1's 0.1385 beyond palm base) |
 | Head reference | `head_link` (fixed) | `head_yaw_link` (fixed) |
 | Leg (hip pitch→ankle roll, straight) | 0.6564 m | 0.5985 m → **root scale 0.912** |
-| Pelvis height, feet flat | 0.792 m straight; spawn 0.76 | 0.743 m straight; 0.7335 at home pose; **spawn 0.745** |
+| Pelvis height, feet flat | 0.792 m straight; spawn 0.76 | 0.743 m straight; 0.7335 at mjlab home, 0.7094 at G1's default pose; **spawn 0.72** |
+| Default pose / action scale | knee 0.669, hip −0.312, ankle −0.363 …; 0.25·effort/kp | **G1's for all 24 joints** (D10); mjlab HOME kept as `MJLAB_HOME_JOINT_POS` |
 | Effort limits | hips 88/139, knee 139, ankles 50, waist 88/50, arm 25, wrist p/y 5 Nm | hips/knee/waist/shoulder p+r 60, ankles 50, shoulder-yaw/elbow/wrist 33 Nm |
 | PD gains (ours) | armature·(2π·10 Hz)², ζ=2 | mjlab real-robot values: legs/waist 100/2, ankles 40/2, shoulders 40/2, distal arm 20/1, armature 0.01 |
 | Motor layout on hardware | 29 slots | same 29-slot LowCmd; slots 14, 20, 21, 27, 28 are phantom (`unitree_mujoco R1_C++.xml`) |
@@ -112,7 +137,10 @@ Palm frame = `wrist_roll_link + [0.080, 0, 0]`, rpy 0. Derived from the wrist me
 forearm tube (r≈0.028 m) ends and the stock fist begins at x≈0.080; Dex3's palm base ring is
 r≈0.028; G1 uses the same "palm at flange" rule. Roll about the forearm axis may differ from
 G1 — check the "L/R" marking orientation on the physical hand. The stock-fist mass stays in
-`wrist_roll_link` (Unitree publishes no EDU wrist inertials).
+`wrist_roll_link` (Unitree publishes no EDU wrist inertials); its geometry is removed from
+the wrist visual (D11). BruteForce (`bruteforce/tracking/assets/r1_dex3_constants.py`)
+mounts the Dex3 at `(0.0415, ±0.003, 0)`, G1's wrist-yaw-link value, 3.9 cm closer to the
+wrist joint; one measurement on the robot settles both projects.
 
 ### 3.3 SONIC code paths that depend on the embodiment (all handled)
 
@@ -212,19 +240,22 @@ preset exists (a missing body raises during env construction).
 ### G3 — Data
 
 ```bash
-python download_from_hf.py --training --sonic-v1-1        # SMPL data -> data/smpl_filtered (+ weights)
-huggingface-cli download bones-studio/seed --repo-type dataset --local-dir $DATA/bones_seed
-# (extract archives per docs/source/user_guide/training_data.md)
-# Track 1: G1 CSV -> R1 PKL (keys preserved => SMPL data stays aligned)
+# S0: selective download/extraction fits on asblab's SSD. Checkpoint is already local.
+hf download bones-studio/seed g1.tar.gz metadata/seed_metadata_v004.csv \
+  --repo-type dataset --local-dir $DATA/bones_seed
+python scripts/r1/curate_bones_s0.py --dest $DATA/bones_seed/s0_source_curated
 python gear_sonic/data_process/transfer_g1_motion_lib_to_r1.py \
-  --input $DATA/bones_seed/g1/csv --output $DATA/motion_lib_r1/robot \
-  --fps 30 --fps_source 120 --num_workers 16 --max-clamp-frac 0.05 --max-vel-frac 0.05
-python gear_sonic/data_process/filter_and_copy_bones_data.py \
-  --source $DATA/motion_lib_r1/robot --dest $DATA/motion_lib_r1/robot_filtered --workers 16
+  --input $DATA/bones_seed/s0_source_curated/g1/csv --output $DATA/motion_lib_r1/S0 \
+  --fps 30 --fps_source 120 --num_workers 8 --max-clamp-frac 0.05 --max-vel-frac 0.05
+hf download nvidia/GEAR-SONIC bones_seed_smpl/bones_seed_smpl.tar.part_a{a,b,c,d,e,f,g} \
+  --local-dir $DATA/sonic_smpl_source
+python scripts/r1/extract_s0_smpl.py # kept R1 names -> data/smpl_filtered/S0
 ```
-Then curate subsets by copying/symlinking motion PKLs (Bones-SEED categories are in the
-motion names/annotations):
-- **S0 bring-up** (~500): idle/stand, in-place stepping, slow walking, arm reaching.
+
+For S1/S2, extend the metadata-driven selection and extract only the needed archive
+members; full extraction is too large for `asblab`. Keep G1 CSV, R1 PKL, and SMPL PKL
+names aligned. Subset goals:
+- **S0 bring-up** (~500): idle/stand, slow walking, standing arm gestures/reaching.
 - **S1 manipulation-centric** (~5–10K): Interactions + Everyday + upper-body Communication + locomotion basics.
 - **S2 broad** (~30–50K incl. mirrored `_M`).
 
@@ -236,6 +267,10 @@ Track 2 (quality, parallel, optional for the first policy): IK retargeting from 
 with GMR (R1 config exists in the fork `FredericAS1231/video2humanoid@R1_adaptation`,
 `smplx_to_r1.json`) for S1; convert with a `--robot r1` path added to
 `convert_soma_csv_to_motion_lib.py` (mirror `transfer_g1_motion_lib_to_r1.py`'s axis/pose_aa code).
+`/home/asblab10/BruteForce` was inspected read-only: its R1 GMR retargeter documents an
+elbow T-pose calibration fix (G1 elbow reference at π/2, not zero), which matters when
+porting IK retargeting. The direct G1-CSV joint-name transfer used for S0 does not apply
+that GMR calibration and should not blindly copy its code or motion files.
 
 ### G4 — R1 environment bring-up
 
@@ -284,8 +319,35 @@ inspect its name and layout and extend `MapBuilder` (add a test in `test_surgery
 
 ### G6 — Fine-tuning
 
-Common flags: `+checkpoint=r1_init/last.pt` (loads policy+critic, no optimizer), data paths,
-`num_envs=4096 headless=True`. Save every 500 it (`algo.config.save_interval`).
+Common flags: `checkpoint=r1_init/last.pt` (loads policy+critic, no optimizer), data paths,
+`headless=True`. Use 512 envs on `asblab`'s 11 GB RTX 2080 Ti (1024 only if the full data
+fits); 4096 is for a 24 GB+ GPU. W&B (metrics + `video` every 250 it, D12) is enabled by the
+R1 preset. Save every 500 it (`++callbacks.model_save.save_frequency=500`). Stage A v2:
+
+```bash
+setsid nohup env -u PYTHONPATH OMNI_KIT_ACCEPT_EULA=YES ACCELERATE_TORCH_DEVICE=cuda:1 \
+  python gear_sonic/train_agent_trl.py +exp=manager/universal_token/all_modes/sonic_r1_dex3 \
+  num_envs=512 headless=True checkpoint=r1_init/last.pt ++algo.config.num_learning_iterations=10000 \
+  ++callbacks.model_save.save_frequency=500 \
+  ++manager_env.commands.motion.motion_lib_cfg.motion_file=data/motion_lib_r1/S0 \
+  ++manager_env.commands.motion.motion_lib_cfg.smpl_motion_file=data/smpl_filtered/S0 \
+  exp_var=stage_a_s0_g1param > logs_rl/console/stage_a_s0_g1param.log 2>&1 < /dev/null & disown
+```
+
+Teleop-only (D13, the current path; no SMPL data):
+
+```bash
+setsid nohup env -u PYTHONPATH OMNI_KIT_ACCEPT_EULA=YES ACCELERATE_TORCH_DEVICE=cuda:1 \
+  python gear_sonic/train_agent_trl.py +exp=manager/universal_token/all_modes/sonic_r1_dex3_teleop \
+  num_envs=1024 headless=True checkpoint=r1_init/stage_a_v2_it100.pt \
+  ++algo.config.num_learning_iterations=10000 ++callbacks.model_save.save_frequency=500 \
+  ++manager_env.commands.motion.motion_lib_cfg.motion_file=data/motion_lib_r1/S0 \
+  exp_var=stage_a_s0 > logs_rl/console/teleop_stage_a_s0.log 2>&1 < /dev/null & disown
+```
+
+S1 for the Quest path: locomotion variety that matches the planner's modes (turning,
+side-stepping, backward walking, stop/start, slow and normal walks) plus standing and walking
+arm reaches/manipulation; no SMPL extraction needed.
 
 | Stage | Data | Purpose | Overrides | Stop when |
 |---|---|---|---|---|
@@ -338,6 +400,31 @@ caveat (position tracked strongly; orientation reduced to palm-normal).
 - **D6 EE contract for a 5-DOF arm** — track palm position strongly, orientation weakly (palm normal); waist yaw/roll free for reach.
 - **D7 mjlab naming** in both URDF and MJCF; identical trees (asserted).
 - **D8 Single-GPU regime** — 4096 envs, curated subsets, staged curriculum; 5090 ⇒ Isaac Sim 5.x.
+- **D9 Palm reward alignment** — SONIC's position reward and the teleop encoder must measure
+  the same R1 palm points; the orientation term stays weak because R1 arms have 5 DOF.
+- **D10 G1 action parameterization** — SONIC's action is `default_pose + scale·a` and the
+  policy observes `q − default_pose`, so the gathered G1 weights (D4) only mean the same
+  thing on the R1 with G1's default pose and per-joint scale (`r1_spec.INIT_JOINT_POS`,
+  `ACTION_SCALE`; checked against `g1.py` in the tests). Gains stay mjlab's (D5). Measured
+  effect in §2 G6.
+- **D11 Dex3 as SONIC's G1 carries it** — NVIDIA's `g1_model_12_dex` attaches the Dex3 with
+  every finger joint fixed; the R1 does the same (fused into `wrist_roll_link`: mass, convex
+  hull collision, meshes). The stock fist's geometry is cut from the wrist visual
+  (`*_wrist_roll_link_forearm.STL`), as BruteForce deletes it; its mass stays.
+- **D12 Training videos** — BruteForce's W&B format (`video` key, 640×480, 50 fps, 10 s of
+  env 0): reference ghost | policy | SMPL human, plus palm targets and palm points,
+  rendered by MuJoCo on the TITAN V in a subprocess (`RolloutVideoCallback`,
+  `scripts/r1/render_rollout_video.py`); mp4/npz in `<run>/videos/train/`.
+- **D13 Quest teleop, teleop-only SONIC** (user decision 2026-09-24) — the robot is driven by
+  a Meta Quest: head + two hands through SONIC's VR 3-point (teleop) encoder, walking through
+  its lower-body command, which SONIC's deploy stack fills from the joystick-driven kinematic
+  planner in `VR_3PT` mode (`docs/source/tutorials/vr_wholebody_teleop.md`). Fingers are
+  handled separately. Only the teleop encoder and the action decoder are built and trained
+  (`sonic_r1_dex3_teleop.yaml`, `actor_critic/universal_token/teleop_mlp_v1.yaml`): actor
+  40.2M instead of 52.1M parameters, no robot-motion/SMPL encoder, no kinematic decoder, no
+  latent-alignment losses, no SMPL data. The decoder keeps its pretrained size (the warm start
+  is the point); the critic (39M, training only) is unchanged. The G1 planner's output maps to
+  the R1's lower-body joints by name, as the training data does — to verify in G7.
 
 ## 7. Risks
 
@@ -346,7 +433,7 @@ caveat (position tracked strongly; orientation reduced to palm-normal).
 | Isaac Lab ordering differs from inferred rule | G2 is blocking; fix rule, regenerate, tests keep G1/H2 honest |
 | Dex3 mount transform / roll wrong | single constant in `r1_spec`; VERIFY on hardware; palm offset re-derived automatically |
 | Distal arm (33 Nm, 0.7 kg hands) too weak for dynamic arm clips | transfer report velocity/clamp filters; relax `ee_body_pos` termination early in stage A |
-| Track-1 data foot skating | root scaled by leg ratio; loader re-grounds frame 0; Track 2 for manipulation clips |
+| Track-1 data foot skating | root scaled by leg ratio; loader re-grounds frame 0; Track 2 for manipulation clips. Measured on 80 S0 clips (MuJoCo FK): frames with a sole > 2 cm below ground 0.9 % (G1 source) → 7.5 % (R1; p90 clip 25 %), median stance skating 0.2 → 1.3 cm/s. Candidate fix: per-frame ground correction in `transfer_g1_motion_lib_to_r1.py` |
 | Surgery leaves a critical layer randomly initialised | dry-run report must be clean before training; extend `MapBuilder` |
 | PhysX OOM at 4096 envs on 24 GB | 2048 envs; `sonic_release` decoder |
 | Upstream moves weekly | `upstream` remote; minimal diffs; `pytest gear_sonic/tests/r1` after each merge |
@@ -358,7 +445,9 @@ caveat (position tracked strongly; orientation reduced to palm-normal).
 3. Who owns head gaze and fingers at runtime (D1 assumes not SONIC)?
 4. Which GPU/box (decides Isaac Sim version, env count)?
 5. Upstream targets: full 6-D palm poses, or position + approach direction? (D6 weighting)
-6. Lower-body intent from upstream: none (idle) / discrete / planner?
+6. ~~Lower-body intent~~ Answered (D13): Meta Quest head + hands, walking via SONIC's
+   joystick-driven kinematic planner (VR_3PT mode).
+7. ~~Encoders~~ Answered (D13): teleop encoder only; robot-motion and SMPL encoders dropped.
 
 ## 9. File map (what was added or changed)
 
@@ -379,7 +468,11 @@ gear_sonic/train_agent_trl.py                ++dump_layout_dir hook
 gear_sonic/config/exp/manager/universal_token/all_modes/sonic_r1_dex3.yaml
 gear_sonic/data_process/transfer_g1_motion_lib_to_r1.py
 gear_sonic/data/assets/robot_description/{urdf/r1/*, mjcf/r1_dex3.xml, R1_PROVENANCE.md}
-gear_sonic/tests/r1/*                        30 tests (assets, ordering, config, transfer, surgery)
+gear_sonic/tests/r1/*                        34 tests (assets, ordering, config, transfer, surgery)
+gear_sonic/trl/callbacks/rollout_video_callback.py + config/callbacks/rollout_video.yaml   W&B videos (D12)
+scripts/r1/render_rollout_video.py           MuJoCo renderer for the recorded rollouts (standalone)
+scripts/r1/{curate_bones_s0,extract_s0_smpl}.py   S0 selection from BONES-SEED metadata / matching SMPL
+docs/r1/TRAINING.md                          reward contract, data, logging
 ```
 
 ## 10. References
@@ -388,4 +481,7 @@ gear_sonic/tests/r1/*                        30 tests (assets, ordering, config,
 - Unitree R1: https://support.unitree.com/home/en/R1_developer/about_R1 · URDF https://github.com/unitreerobotics/unitree_ros/tree/master/robots/r1_description · RL model https://github.com/unitreerobotics/unitree_rl_mjlab · MuJoCo https://github.com/unitreerobotics/unitree_mujoco/tree/main/unitree_robots/r1
 - Dex3-1 URDFs: https://github.com/unitreerobotics/unitree_ros/tree/master/robots/dexterous_hand_description/dex3_1
 - Data/weights: https://huggingface.co/datasets/bones-studio/seed · https://huggingface.co/nvidia/GEAR-SONIC
+- Methods and reward rationale: https://arxiv.org/abs/2511.07820 (SONIC) ·
+  https://arxiv.org/abs/2509.16757 (HDMI) · https://arxiv.org/abs/2511.15200 (VIRAL) ·
+  `docs/r1/TRAINING.md`
 - Retargeting: https://github.com/YanjieZe/GMR · https://github.com/NVIDIA/soma-retargeter

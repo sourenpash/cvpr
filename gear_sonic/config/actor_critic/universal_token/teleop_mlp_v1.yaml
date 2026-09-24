@@ -1,0 +1,38 @@
+# @package _global_
+# Teleop-only universal-token policy: all_mlp_v1's VR 3-point (teleop) encoder, FSQ quantizer and
+# action decoder (g1_dyn). The robot-motion (g1) and SMPL encoders, the kinematic decoder (g1_kin)
+# and their latent-alignment losses are not built. Checkpoints of all_mlp_v1 load into it
+# (policy weights load with strict=False; the missing modules' weights are ignored).
+
+defaults:
+  - critics/mlp@algo.config.critic
+  - quantizers/fsq@algo.config.actor.backbone.quantizer
+  - encoders/teleop_mlp@algo.config.actor.backbone.encoders
+  - decoders/g1_dyn_mlp@algo.config.actor.backbone.decoders
+
+manager_env:
+  commands:
+    motion:
+      # The motion command looks up a "g1" entry (commands.py), so it stays listed with probability 0.
+      encoder_sample_probs: # unnormalized
+        g1: 0.0
+        teleop: 1.0
+
+algo:
+  config:
+    compute_aux_loss: false
+    actor:
+      _target_: gear_sonic.trl.modules.actor_critic_modules.Actor
+      running_mean_std: false
+      input_obs_dict: true
+      has_aux_loss: false
+      backbone:
+        _target_: gear_sonic.trl.modules.universal_token_modules.UniversalTokenModule
+        num_future_frames: ${manager_env.commands.motion.num_future_frames}
+        proprioception_features: ["actor_obs"]
+        encoder_sample_probs: ${manager_env.commands.motion.encoder_sample_probs}
+        num_fsq_levels: 32
+        fsq_level_list: 32
+        max_num_tokens: 2
+        active_encoders: ["teleop"]
+        active_decoders: ["g1_dyn"]

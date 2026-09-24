@@ -1,25 +1,23 @@
 # @package _global_
-# SONIC for Unitree R1 (24 DOF) + Dex3-1 hands - 3 encoders (robot, teleop, SMPL).
-# Recipe = sonic_v1_1 (robot-heading-normalized targets + wrist-pose augmentation), which is
-# the variant built for model-generated hand targets. Every embodiment-specific value below
-# is mirrored from gear_sonic/utils/embodiment/r1_spec.py (tests assert they stay in sync).
+# SONIC for Unitree R1 (24 DOF) + Dex3-1 hands, teleop only (PLAN.md D13): a Meta Quest drives the
+# robot through SONIC's VR 3-point encoder (head + two hands) with the lower body from a locomotion
+# command (SONIC's VR_3PT mode: kinematic planner legs + VR upper body). Only the teleop encoder
+# and the action decoder are built: no robot-motion or SMPL encoder, no kinematic decoder, no
+# latent-alignment losses, no SMPL data. Everything embodiment-specific is sonic_r1_dex3.yaml's
+# (tests assert the two presets agree with r1_spec.py).
 #
-# Data paths are given on the command line, e.g.
-#   ++manager_env.commands.motion.motion_lib_cfg.motion_file=data/motion_lib_r1/S1
-#   ++manager_env.commands.motion.motion_lib_cfg.smpl_motion_file=data/smpl_filtered
-# Warm start from the surgically-initialised G1 checkpoint (scripts/r1/surgery_g1_to_r1_checkpoint.py):
-#   ++algo.config.pretrained_model.path=r1_init/last.pt
+# Data: ++manager_env.commands.motion.motion_lib_cfg.motion_file=data/motion_lib_r1/S0
+# Warm start: checkpoint=<an sonic_r1_dex3 or r1_init checkpoint> (policy loads with strict=False).
 
 defaults:
   - /algo: ppo_im_phc
   - /manager_env: base_env
   - /callbacks/read_eval
   - /callbacks/im_resample
-  - /callbacks/rollout_video # W&B videos: reference | policy | human, palm targets (BruteForce format)
-  - /aux_losses: universal_token/g1_recon_and_all_latent
+  - /callbacks/rollout_video # W&B videos: reference | policy, palm targets (BruteForce format)
   - override /trainer: trl_ppo_aux
-  - override /actor_critic: universal_token/all_mlp_v1
-  - override /manager_env/observations/tokenizer: unitoken_all_noz_heading
+  - override /actor_critic: universal_token/teleop_mlp_v1
+  - override /manager_env/observations/tokenizer: unitoken_teleop_heading
   - override /manager_env/observations/policy: local_dir_hist
   - override /manager_env/observations/critic: privileged_mf_hist
   - override /manager_env/events: tracking/level0_4
@@ -39,7 +37,7 @@ use_wandb: true
 wandb_sync_tensorboard: false # metrics are logged directly by WandbCallback
 wandb:
   wandb_entity: sourenpashangpour-university-of-toronto
-  wandb_group: r1_dex3
+  wandb_group: r1_dex3_teleop
   wandb_dir: ${base_dir}/wandb
 
 actor_prop_history_length: 10
@@ -83,13 +81,6 @@ manager_env:
         asset_cfg:
           body_names: ".*wrist_roll.*|torso_link"
 
-  observations:
-    tokenizer:
-      # Isaac Lab DOF indices of the wrist joints fed to the SMPL encoder (G1: 6 wrist DOF -> R1: 2).
-      joint_pos_multi_future_wrist_for_smpl:
-        params:
-          joints_idx: [22, 23]
-
   commands:
     motion:
       # Hand grasp point = wrist_roll_link + Dex3 mount (0.080) + G1-equivalent 0.1385 beyond palm base.
@@ -116,12 +107,9 @@ manager_env:
         ]
       num_future_frames: 10
       dt_future_ref_frames: 0.1
-      smpl_num_future_frames: 10
-      smpl_dt_future_ref_frames: 0.02
       cat_upper_body_poses: true
       cat_upper_body_poses_prob: 0.5
       freeze_frame_aug: true
-      teleop_sample_prob_when_smpl: 0.5
       randomize_wrist_poses: true
 
       motion_lib_cfg:
@@ -131,8 +119,7 @@ manager_env:
         adaptive_sampling:
           adp_samp_failure_rate_max_over_mean: 200
         motion_file: null # REQUIRED on the command line (R1 motion_lib PKL directory)
-        smpl_motion_file: dummy # override with data/smpl_filtered for real SMPL-encoder training
-        smpl_y_up: true
+        smpl_motion_file: dummy # no SMPL encoder
         asset:
           assetFileName: "r1_dex3.xml"
 
@@ -146,10 +133,7 @@ algo:
     max_grad_norm: 0.1
     actor:
       backbone:
-        reencode_smpl_g1_recon: true
         encoders:
-          g1:
-            inputs: ["command_multi_future_nonflat", "motion_anchor_ori_heading_mf_nonflat"]
           teleop:
             inputs:
               [
@@ -158,16 +142,7 @@ algo:
                 "vr_3point_local_orn_target",
                 "motion_anchor_ori_heading",
               ]
-          smpl:
-            inputs:
-              [
-                "smpl_joints_multi_future_local_nonflat",
-                "smpl_root_ori_heading_multi_future",
-                "joint_pos_multi_future_wrist_for_smpl",
-              ]
         decoders:
-          g1_kin:
-            outputs: ["command_multi_future_nonflat", "motion_anchor_ori_heading_mf_nonflat"]
           g1_dyn:
             params:
               module_config_dict:

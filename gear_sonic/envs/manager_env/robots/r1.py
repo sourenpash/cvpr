@@ -9,6 +9,9 @@ SONIC's G1 config instead derives kp/kd from per-motor armature and a 10 Hz natu
 we do not have R1 rotor inertias, so mjlab's numbers are the starting point. If training is
 unstable at num_envs=16 (robot explodes / falls immediately), reduce stiffness or increase
 damping per group (docs/source/user_guide/new_embodiments.md, "KP/KD tuning").
+
+Default pose and action scale are G1's for the shared joints (r1_spec.INIT_JOINT_POS /
+ACTION_SCALE, PLAN.md D10): the policy is warm-started from G1 weights gathered by joint name.
 """
 
 from isaaclab.actuators import ImplicitActuatorCfg
@@ -72,16 +75,6 @@ R1_DEX3_CFG = ArticulationCfg(
     actuators={name: _actuator(group) for name, group in r1_spec.ACTUATOR_GROUPS.items()},
 )
 
-# action_scale[joint_expr] = 0.25 * effort_limit / stiffness (same rule as G1/H2/mjlab)
-R1_DEX3_ACTION_SCALE = {}
-for a in R1_DEX3_CFG.actuators.values():
-    e = a.effort_limit_sim
-    s = a.stiffness
-    names = a.joint_names_expr
-    if not isinstance(e, dict):
-        e = dict.fromkeys(names, e)
-    if not isinstance(s, dict):
-        s = dict.fromkeys(names, s)
-    for n in names:
-        if n in e and n in s and s[n]:
-            R1_DEX3_ACTION_SCALE[n] = r1_spec.ACTION_SCALE_FACTOR * e[n] / s[n]
+# action_scale[joint_expr]: G1's value for the same joint (r1_spec.ACTION_SCALE, PLAN.md D10),
+# so the warm-started G1 output layer commands the same joint targets.
+R1_DEX3_ACTION_SCALE = dict(r1_spec.ACTION_SCALE)

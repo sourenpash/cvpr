@@ -117,11 +117,27 @@ VR_HEAD_POINT_OFFSET = (0.0, 0.0, 0.32)
 REWARD_TORSO_POINT_OFFSET = (0.0, 0.0, 0.45)
 
 # --------------------------------------------------------------------------------------
-# Default standing pose (unitree_rl_mjlab HOME_KEYFRAME; real-robot validated)
+# Default joint pose = action offset and joint_pos_rel origin (PLAN.md D10)
 # --------------------------------------------------------------------------------------
-# Feet-flat pelvis height at this pose is 0.7335 m (MuJoCo FK on r1_dex3.xml); spawn ~1 cm above.
-INIT_POS_Z = 0.745
+# SONIC's action is target = default_pose + action_scale * a, and the policy observes
+# q - default_pose. The warm start gathers G1 weights by joint name (D4), so the R1 uses
+# G1's default pose (g1.py G1_CYLINDER_MODEL_12_DEX_CFG.init_state) for the shared joints;
+# with mjlab's HOME pose the transferred policy's knee target at a=0 was 0.30 instead of 0.669.
+# Feet-flat pelvis height at this pose is 0.7094 m (MuJoCo FK on r1_dex3.xml); spawn ~1 cm above.
+INIT_POS_Z = 0.72
 INIT_JOINT_POS = {
+    ".*_hip_pitch_joint": -0.312,
+    ".*_knee_joint": 0.669,
+    ".*_ankle_pitch_joint": -0.363,
+    ".*_elbow_joint": 0.6,
+    "left_shoulder_roll_joint": 0.2,
+    "left_shoulder_pitch_joint": 0.2,
+    "right_shoulder_roll_joint": -0.2,
+    "right_shoulder_pitch_joint": 0.2,
+}
+# unitree_rl_mjlab HOME_KEYFRAME (real-robot validated standing pose for its velocity policy);
+# kept for reference and deployment bring-up, no longer the policy's action offset.
+MJLAB_HOME_JOINT_POS = {
     ".*_hip_pitch_joint": -0.1,
     ".*_knee_joint": 0.3,
     ".*_ankle_pitch_joint": -0.2,
@@ -177,7 +193,31 @@ ACTUATOR_GROUPS = {
         armature=0.01,
     ),
 }
-ACTION_SCALE_FACTOR = 0.25  # action_scale = factor * effort_limit / stiffness (as in g1.py)
+
+# Per-joint action scale = G1's for the same joint name (g1.py G1_MODEL_12_ACTION_SCALE:
+# 0.25 * G1 effort / G1 kp, kp = armature * (2 pi 10 Hz)^2), not 0.25 * R1 effort / R1 kp.
+# Same reason as INIT_JOINT_POS: the gathered G1 output layer then commands the same joint
+# targets on the R1 (the R1 rule gave 2.3x smaller hip/knee and 3.7x smaller yaw offsets).
+# The gains above stay mjlab's; the tests check these values against g1.py.
+_G1_OMEGA_SQ = (10 * 2.0 * 3.1415926535) ** 2
+_G1_KP_7520_22 = 0.025101925 * _G1_OMEGA_SQ
+_G1_KP_7520_14 = 0.010177520 * _G1_OMEGA_SQ
+_G1_KP_5020 = 0.003609725 * _G1_OMEGA_SQ
+ACTION_SCALE = {
+    ".*_hip_pitch_joint": 0.25 * 139.0 / _G1_KP_7520_22,
+    ".*_hip_roll_joint": 0.25 * 139.0 / _G1_KP_7520_22,
+    ".*_hip_yaw_joint": 0.25 * 88.0 / _G1_KP_7520_14,
+    ".*_knee_joint": 0.25 * 139.0 / _G1_KP_7520_22,
+    ".*_ankle_pitch_joint": 0.25 * 50.0 / (2.0 * _G1_KP_5020),
+    ".*_ankle_roll_joint": 0.25 * 50.0 / (2.0 * _G1_KP_5020),
+    "waist_roll_joint": 0.25 * 50.0 / (2.0 * _G1_KP_5020),
+    "waist_yaw_joint": 0.25 * 88.0 / _G1_KP_7520_14,
+    ".*_shoulder_pitch_joint": 0.25 * 25.0 / _G1_KP_5020,
+    ".*_shoulder_roll_joint": 0.25 * 25.0 / _G1_KP_5020,
+    ".*_shoulder_yaw_joint": 0.25 * 25.0 / _G1_KP_5020,
+    ".*_elbow_joint": 0.25 * 25.0 / _G1_KP_5020,
+    ".*_wrist_roll_joint": 0.25 * 25.0 / _G1_KP_5020,
+}
 
 # --------------------------------------------------------------------------------------
 # Body sets used by the tracking configs (R1 equivalents of motion.yaml / preset entries)
@@ -197,9 +237,14 @@ REWARD_POINT_BODY_OFFSET_5PT = [
     [0.0, 0.0, 0.0],
     [0.0, 0.0, 0.0],
 ]
-# The v1.1 / release presets override reward_point_body with a 3-point set.
+# The v1.1 / release presets override reward_point_body with a 3-point set. For R1,
+# score the same physical palm points used by the teleop command, not wrist origins.
 REWARD_POINT_BODY_3PT = [TORSO_BODY, LEFT_EE_BODY, RIGHT_EE_BODY]
-REWARD_POINT_BODY_OFFSET_3PT = [list(REWARD_TORSO_POINT_OFFSET), [0.0, 0.0, 0.0], [0.0, 0.0, 0.0]]
+REWARD_POINT_BODY_OFFSET_3PT = [
+    list(REWARD_TORSO_POINT_OFFSET),
+    list(LEFT_HAND_POINT_OFFSET),
+    list(RIGHT_HAND_POINT_OFFSET),
+]
 
 # 14 tracked bodies (motion.yaml body_names) with G1 wrist_yaw -> R1 wrist_roll.
 TRACKED_BODY_NAMES = [

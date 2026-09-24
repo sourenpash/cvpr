@@ -13,11 +13,12 @@ from gear_sonic.tests.r1.conftest import PRESET, R1_URDF, REPO
 from gear_sonic.utils.embodiment import r1_spec as spec
 
 MOTION_YAML = REPO / "gear_sonic/config/manager_env/commands/terms/motion.yaml"
+TELEOP_PRESET = PRESET.with_name("sonic_r1_dex3_teleop.yaml")
 
 
-@pytest.fixture(scope="module")
-def preset() -> dict:
-    return yaml.safe_load(PRESET.read_text())
+@pytest.fixture(scope="module", params=[PRESET, TELEOP_PRESET], ids=lambda p: p.stem)
+def preset(request) -> dict:
+    return yaml.safe_load(request.param.read_text())
 
 
 @pytest.fixture(scope="module")
@@ -42,6 +43,8 @@ def test_preset_tracking_points_match_spec(preset):
     assert motion["vr_3point_body_offset"] == spec.VR_3POINT_BODY_OFFSET
     assert motion["reward_point_body"] == spec.REWARD_POINT_BODY_3PT
     assert motion["reward_point_body_offset"] == spec.REWARD_POINT_BODY_OFFSET_3PT
+    # The EE position reward must score the same palm points the teleop encoder targets.
+    assert motion["reward_point_body_offset"][1:] == motion["vr_3point_body_offset"][:2]
     assert motion["body_names"] == spec.TRACKED_BODY_NAMES
     assert len(motion["body_names"]) == 14
 
@@ -61,12 +64,40 @@ def test_preset_body_name_overrides_match_spec(preset):
         me["events"]["randomize_rigid_body_mass"]["params"]["asset_cfg"]["body_names"]
         == spec.UPPER_BODY_EVENT_BODY_REGEX
     )
-    assert (
-        me["observations"]["tokenizer"]["joint_pos_multi_future_wrist_for_smpl"]["params"][
-            "joints_idx"
-        ]
-        == spec.WRIST_ISAACLAB_DOF_INDICES
-    )
+    if "observations" in me:  # the SMPL encoder's wrist input (three-encoder preset only)
+        assert (
+            me["observations"]["tokenizer"]["joint_pos_multi_future_wrist_for_smpl"]["params"][
+                "joints_idx"
+            ]
+            == spec.WRIST_ISAACLAB_DOF_INDICES
+        )
+
+
+def test_teleop_preset_builds_only_the_quest_path():
+    """sonic_r1_dex3_teleop: VR 3-point encoder + action decoder, nothing else (PLAN.md D13)."""
+    hydra = pytest.importorskip("hydra")
+    from omegaconf import OmegaConf
+
+    from gear_sonic.utils import config_utils
+
+    config_utils.register_rl_resolvers()
+    with hydra.initialize_config_dir(
+        config_dir=str(REPO / "gear_sonic/config"), version_base="1.1"
+    ):
+        cfg = hydra.compose(
+            config_name="base",
+            overrides=["+exp=manager/universal_token/all_modes/sonic_r1_dex3_teleop"],
+        )
+    backbone = cfg.algo.config.actor.backbone
+    assert list(backbone.encoders) == ["teleop"] and list(backbone.active_encoders) == ["teleop"]
+    assert list(backbone.decoders) == ["g1_dyn"] and list(backbone.active_decoders) == ["g1_dyn"]
+    assert not backbone.get("aux_loss_func") and not cfg.algo.config.actor.has_aux_loss
+    probs = OmegaConf.to_container(cfg.manager_env.commands.motion.encoder_sample_probs)
+    assert probs == {"g1": 0.0, "teleop": 1.0}  # commands.py requires the g1 key
+    tokenizer = {k for k in cfg.manager_env.observations.tokenizer if k.endswith(("_target", "_b"))}
+    assert set(backbone.encoders.teleop.inputs) <= set(cfg.manager_env.observations.tokenizer)
+    assert not any("smpl" in k for k in cfg.manager_env.observations.tokenizer), tokenizer
+    assert cfg.manager_env.commands.motion.motion_lib_cfg.smpl_motion_file == "dummy"
 
 
 def test_all_referenced_bodies_exist_in_urdf(preset, urdf_bodies):
@@ -118,9 +149,24 @@ def test_robot_config_module_builds_action_scale(isaaclab_stubs):
         assert len(groups) == 1, f"{j} matched actuator groups {groups}"
         scales = [s for p, s in r1.R1_DEX3_ACTION_SCALE.items() if re.fullmatch(p, j)]
         assert len(scales) == 1 and scales[0] > 0
-    # sanity on magnitudes vs G1 (G1 legs: 0.25*139/99 ~ 0.35; R1 legs: 0.25*60/100 = 0.15)
-    assert abs(r1.R1_DEX3_ACTION_SCALE[".*_knee_joint"] - 0.15) < 1e-9
     assert r1.R1_ISAACLAB_TO_MUJOCO_MAPPING["isaaclab_joints"][0] == spec.ROOT_BODY
+
+
+def _lookup(patterns: dict, joint: str):
+    hits = [v for p, v in patterns.items() if re.fullmatch(p, joint)]
+    assert len(hits) <= 1, f"{joint} matched {len(hits)} patterns"
+    return hits[0] if hits else 0.0
+
+
+def test_action_parameterization_matches_g1(isaaclab_stubs):
+    """Warm start (D4/D10): default pose and action scale equal G1's for every shared joint."""
+    g1 = importlib.import_module("gear_sonic.envs.manager_env.robots.g1")
+    r1 = importlib.import_module("gear_sonic.envs.manager_env.robots.r1")
+    g1_pose = g1.G1_CYLINDER_MODEL_12_DEX_CFG.init_state.joint_pos
+    for j in spec.MJCF_JOINT_ORDER:
+        g1_scale = _lookup(g1.G1_MODEL_12_ACTION_SCALE, j)
+        assert abs(_lookup(r1.R1_DEX3_ACTION_SCALE, j) - g1_scale) < 1e-9, j
+        assert _lookup(r1.R1_DEX3_CFG.init_state.joint_pos, j) == _lookup(g1_pose, j), j
 
 
 def test_order_converter_registry():
