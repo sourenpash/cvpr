@@ -1,0 +1,9 @@
+rollout_video:
+  # W&B training videos in BruteForce's format: env 0, reference ghost | policy | human, palm targets.
+  _target_: gear_sonic.trl.callbacks.rollout_video_callback.RolloutVideoCallback
+  video_dir: ${experiment_dir}/videos/train
+  every_n_iterations: 250
+  first_iteration: 1
+  num_frames: 500 # 10 s at 50 Hz
+  egl_device: 0 # MuJoCo EGL device for the render subprocess
+  wandb_key: video
