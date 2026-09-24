@@ -215,7 +215,7 @@ def main(config: OmegaConf):
             project=project_name,
             entity=config.wandb.wandb_entity,
             name=run_name,
-            sync_tensorboard=True,
+            sync_tensorboard=config.get("wandb_sync_tensorboard", True),
             config=unresolved_conf,
             dir=wandb_dir,
             id=config.wandb.wandb_id,
@@ -428,6 +428,8 @@ def main(config: OmegaConf):
         out_dir = dump_layout_and_template(env, config, policy, value_model, config.dump_layout_dir)
         logger.info(f"Wrote observation layout and template checkpoint to {out_dir}; exiting.")
         if simulator_type == "IsaacSim":
+            if config.use_wandb and accelerator.is_main_process:
+                wandb.finish()
             os._exit(0)
         return
 
@@ -484,6 +486,8 @@ def main(config: OmegaConf):
     trainer.train()
 
     if simulator_type == "IsaacSim":
+        if config.use_wandb and accelerator.is_main_process:
+            wandb.finish()
         os._exit(0)
 
 
