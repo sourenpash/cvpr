@@ -101,10 +101,39 @@ def test_root_translation_scaled_about_first_frame_and_grounded(tr):
     disp_src = src[-1, :2] - src[0, :2]
     disp_dst = dst[-1, :2] - dst[0, :2]
     assert np.allclose(disp_dst, tr.scale * disp_src, atol=1e-5)
-    # frame 0 stands on the ground (lowest foot capsule surface at z=0)
-    z_low = tr.lowest_foot_z(dst[0], out["root_rot"][0], out["dof"][0])
-    assert abs(z_low) < 1e-4
+    # frame 0 stands on the ground: the lowest heel/toe sole point (capsule end caps) at z=0
+    sole = tr._sole_trajectory(tr.m_r1, tr.d_r1, tr.feet_r1, dst, out["root_rot"], out["dof"])
+    assert abs(sole[0, ..., 2].min()) < 1e-4
     assert abs(st.ground_shift_m) < 0.2
+
+
+def _grounded_g1_entry(tr, T: int, walk_speed: float) -> dict:
+    """make_g1_entry with the G1 soles on the ground (feet slide with the root: skating source)."""
+    entry = make_g1_entry(T=T, walk_speed=walk_speed)
+    dof = entry["dof"][:, : tr.m_g1.nq - 7].astype(np.float64)
+    sole = tr._sole_trajectory(
+        tr.m_g1, tr.d_g1, tr.feet_g1, entry["root_trans_offset"], entry["root_rot"], dof
+    )
+    entry["root_trans_offset"][:, 2] -= sole[..., 2].min()
+    return entry
+
+
+def test_contact_fix_pins_stance_feet_and_grounds_them(tr):
+    """Source feet creep at 0.1 m/s while planted: the R1 feet are held still, soles at z=0."""
+    fps, T = 30.0, 60
+    entry = _grounded_g1_entry(tr, T, walk_speed=0.1)
+    out, st = tr.transfer_entry("creep", entry)
+    assert st.contact_frac > 0.95
+    disp = np.linalg.norm(out["root_trans_offset"][-1, :2] - out["root_trans_offset"][0, :2])
+    assert disp < 5e-3, f"stance feet pinned: root moved {disp:.4f} m"
+    sole = tr._sole_trajectory(
+        tr.m_r1, tr.d_r1, tr.feet_r1, out["root_trans_offset"], out["root_rot"], out["dof"]
+    )
+    assert np.abs(sole[..., 2].min(axis=(1, 2))).max() < 2e-3
+    assert st.frac_below_2cm == 0.0 and st.skate_median_mps < 0.01
+    legacy, _ = G1ToR1Transfer(contact_fix=False).transfer_entry("creep", entry)
+    moved = np.linalg.norm(legacy["root_trans_offset"][-1, :2] - legacy["root_trans_offset"][0, :2])
+    assert np.isclose(moved, tr.scale * 0.1 * (T - 1) / fps, rtol=1e-3)
 
 
 def test_cli_end_to_end_on_pkl_tree(tmp_path):
