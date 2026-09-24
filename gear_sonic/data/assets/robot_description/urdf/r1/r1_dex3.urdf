@@ -863,7 +863,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="meshes/left_wrist_roll_link.STL"/>
+        <mesh filename="meshes/left_wrist_roll_link_forearm.STL"/>
       </geometry>
       <material name="dark"/>
     </visual>
@@ -998,7 +998,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="meshes/right_wrist_roll_link.STL"/>
+        <mesh filename="meshes/right_wrist_roll_link_forearm.STL"/>
       </geometry>
       <material name="dark"/>
     </visual>

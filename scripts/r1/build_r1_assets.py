@@ -16,10 +16,11 @@ Deterministic transformation (re-runnable; outputs are committed):
 
 URDF changes: rename pelvis_link->pelvis and waist_yaw_link->torso_link; head joints fixed;
 Dex3-1 hands attached as fixed subtrees on the wrist roll links (fingers fixed at the open
-pose); wrist collision mesh (which contains the stock fist) replaced by a forearm cylinder.
-MJCF changes: meshdir; Dex3 mass fused into the wrist bodies (parallel-axis); hand
-collision/palm site extended; dangling <exclude> entries removed; <actuator> block added
-(required by SONIC's Humanoid_Batch).
+pose); wrist collision mesh (which contains the stock fist) replaced by a forearm cylinder;
+wrist visual mesh cut at the Dex3 mount (``*_wrist_roll_link_forearm.STL``, fist removed).
+MJCF changes: meshdir; Dex3 mass fused into the wrist bodies (parallel-axis); forearm visual
+mesh; hand collision/palm site extended; dangling <exclude> entries removed; <actuator> block
+added (required by SONIC's Humanoid_Batch).
 
 Usage:
     python scripts/r1/fetch_upstream_assets.py      # once
@@ -71,6 +72,65 @@ PALM_SITE_X = spec.DEX3_MOUNT_XYZ[0] + 0.06  # Dex3 palm COM is ~0.062 beyond th
 
 def _fmt(vals) -> str:
     return " ".join(f"{float(v):.6g}" for v in vals)
+
+
+# --------------------------------------------------------------------------------------
+# Forearm visual: the stock wrist mesh minus the stock fist that the Dex3 replaces
+# --------------------------------------------------------------------------------------
+_STL_RECORD = np.dtype([("n", "<f4", 3), ("v", "<f4", (3, 3)), ("a", "<u2")])
+
+
+def _read_stl(path: Path) -> np.ndarray:
+    """Triangles (n, 3, 3) of a binary or ASCII STL."""
+    data = path.read_bytes()
+    if data[:5] == b"solid" and b"facet" in data[:512]:
+        verts = [
+            [float(v) for v in line.split()[1:4]]
+            for line in data.decode().splitlines()
+            if line.strip().startswith("vertex")
+        ]
+        return np.asarray(verts, dtype=np.float64).reshape(-1, 3, 3)
+    n = int.from_bytes(data[80:84], "little")
+    return np.frombuffer(data, dtype=_STL_RECORD, count=n, offset=84)["v"].astype(np.float64)
+
+
+def _write_stl(path: Path, tris: np.ndarray) -> None:
+    rec = np.zeros(len(tris), dtype=_STL_RECORD)
+    rec["v"] = tris
+    normals = np.cross(tris[:, 1] - tris[:, 0], tris[:, 2] - tris[:, 0])
+    rec["n"] = normals / np.linalg.norm(normals, axis=1, keepdims=True).clip(1e-12)
+    path.write_bytes(b"\0" * 80 + len(tris).to_bytes(4, "little") + rec.tobytes())
+
+
+def _clip_below_x(tris: np.ndarray, x_max: float) -> np.ndarray:
+    """Keep the part of every triangle with x <= x_max (Sutherland-Hodgman, fan-triangulated)."""
+    out = []
+    for tri in tris:
+        poly = []
+        for i in range(3):
+            a, b = tri[i], tri[(i + 1) % 3]
+            if a[0] <= x_max:
+                poly.append(a)
+            if (a[0] <= x_max) != (b[0] <= x_max):
+                poly.append(a + (x_max - a[0]) / (b[0] - a[0]) * (b - a))
+        out += [(poly[0], poly[k], poly[k + 1]) for k in range(1, len(poly) - 1)]
+    return np.asarray(out, dtype=np.float64).reshape(-1, 3, 3)
+
+
+def forearm_mesh_name(wrist_link: str) -> str:
+    return f"{wrist_link}_forearm"
+
+
+def write_forearm_meshes(mesh_dir: Path) -> None:
+    """``<side>_wrist_roll_link_forearm.STL``: the wrist mesh up to the Dex3 mount plane.
+
+    The upstream wrist_roll_link mesh is the forearm tube (x < 0.080) plus the stock fist
+    (0.080 < x < 0.143), which would otherwise render through the Dex3 palm (as BruteForce's
+    r1_dex3_constants.py does, the fist geometry is removed; its mass stays in the link).
+    """
+    for wrist in (spec.LEFT_EE_BODY, spec.RIGHT_EE_BODY):
+        tris = _clip_below_x(_read_stl(SRC_R1_MESHES / f"{wrist}.STL"), spec.DEX3_MOUNT_XYZ[0])
+        _write_stl(mesh_dir / f"{forearm_mesh_name(wrist)}.STL", tris)
 
 
 def _pretty(root: ET.Element) -> str:
@@ -127,9 +187,12 @@ def build_urdf() -> ET.Element:
         if joint.get("name") in spec.FIXED_JOINTS:
             _make_fixed(joint)
 
-    # Wrist collision: the upstream mesh includes the stock fist which the Dex3 replaces.
+    # Wrist collision and visual: the upstream mesh includes the stock fist which the Dex3
+    # replaces; collide with a forearm cylinder and draw the mesh cut at the Dex3 mount.
     for link in root.findall("link"):
         if link.get("name") in (spec.LEFT_EE_BODY, spec.RIGHT_EE_BODY):
+            for mesh in link.findall("visual/geometry/mesh"):
+                mesh.set("filename", f"{forearm_mesh_name(link.get('name'))}.STL")
             for col in link.findall("collision"):
                 link.remove(col)
             col = ET.SubElement(link, "collision")
@@ -278,6 +341,10 @@ def build_mjcf(urdf_root: ET.Element) -> ET.Element:
         (spec.RIGHT_EE_BODY, spec.RIGHT_PALM_BODY),
     ):
         wbody = bodies[wrist]
+        # Draw the forearm only; the stock fist is replaced by the Dex3 (write_forearm_meshes).
+        wrist_mesh = asset.find(f"mesh[@name='{wrist}']")
+        if wrist_mesh is not None:
+            wrist_mesh.set("file", f"{forearm_mesh_name(wrist)}.STL")
         # Fuse Dex3 mass into the wrist body.
         hand_parts = _urdf_subtree_bodies(urdf_root, palm, wrist)
         fused = combine([mjcf_inertial_to_body(wbody.find("inertial"))] + hand_parts)
@@ -402,6 +469,11 @@ def main() -> None:
                 shutil.copy2(f, OUT_MESH_DIR / f.name)
                 n += 1
         print(f"copied {n} meshes -> {OUT_MESH_DIR.relative_to(REPO)}")
+    OUT_MESH_DIR.mkdir(exist_ok=True)
+    write_forearm_meshes(OUT_MESH_DIR)
+    print(
+        f"wrote forearm meshes (cut at x={spec.DEX3_MOUNT_XYZ[0]}) -> {OUT_MESH_DIR.relative_to(REPO)}"
+    )
 
     maps = compute_ordering_maps(OUT_URDF, OUT_MJCF)
     header = (

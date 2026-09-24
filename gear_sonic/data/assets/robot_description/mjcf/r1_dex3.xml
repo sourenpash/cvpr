@@ -53,12 +53,12 @@
     <mesh name="left_shoulder_roll_link" file="left_shoulder_roll_link.STL"/>
     <mesh name="left_shoulder_yaw_link" file="left_shoulder_yaw_link.STL"/>
     <mesh name="left_elbow_link" file="left_elbow_link.STL"/>
-    <mesh name="left_wrist_roll_link" file="left_wrist_roll_link.STL"/>
+    <mesh name="left_wrist_roll_link" file="left_wrist_roll_link_forearm.STL"/>
     <mesh name="right_shoulder_pitch_link" file="right_shoulder_pitch_link.STL"/>
     <mesh name="right_shoulder_roll_link" file="right_shoulder_roll_link.STL"/>
     <mesh name="right_shoulder_yaw_link" file="right_shoulder_yaw_link.STL"/>
     <mesh name="right_elbow_link" file="right_elbow_link.STL"/>
-    <mesh name="right_wrist_roll_link" file="right_wrist_roll_link.STL"/>
+    <mesh name="right_wrist_roll_link" file="right_wrist_roll_link_forearm.STL"/>
     <mesh name="head_pitch_link" file="head_pitch_link.STL"/>
     <mesh name="head_yaw_link" file="head_yaw_link.STL"/>
     <mesh name="left_hand_palm_link" file="left_hand_palm_link.STL"/>

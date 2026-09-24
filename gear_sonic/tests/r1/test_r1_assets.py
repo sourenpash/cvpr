@@ -80,6 +80,27 @@ def test_urdf_wrist_collision_is_forearm_cylinder(urdf_root):
         assert len(cols) == 1 and cols[0].find("geometry/cylinder") is not None
 
 
+def test_wrist_visual_is_forearm_without_stock_fist(urdf_root):
+    """The Dex3 replaces the stock fist: the wrist mesh ends at the Dex3 mount, in both models."""
+    import importlib.util
+
+    build = REPO / "scripts/r1/build_r1_assets.py"
+    mod_spec = importlib.util.spec_from_file_location("build_r1_assets", build)
+    b = importlib.util.module_from_spec(mod_spec)
+    mod_spec.loader.exec_module(b)
+    mjcf_meshes = {m.get("name"): m.get("file") for m in ET.parse(R1_MJCF).getroot().iter("mesh")}
+    for ee in (spec.LEFT_EE_BODY, spec.RIGHT_EE_BODY):
+        link = [el for el in urdf_root.findall("link") if el.get("name") == ee][0]
+        forearm = f"{b.forearm_mesh_name(ee)}.STL"
+        assert [m.get("filename") for m in link.findall("visual/geometry/mesh")] == [
+            f"meshes/{forearm}"
+        ]
+        assert mjcf_meshes[ee] == forearm
+        x = b._read_stl(R1_URDF.parent / "meshes" / forearm)[..., 0]
+        assert x.max() <= spec.DEX3_MOUNT_XYZ[0] + 1e-6 and x.min() < 0.0
+        assert b._read_stl(R1_URDF.parent / "meshes" / f"{ee}.STL")[..., 0].max() > 0.13  # fist
+
+
 def test_urdf_mesh_paths_relative_and_present(urdf_root):
     mesh_dir = R1_URDF.parent / "meshes"
     for mesh in urdf_root.iter("mesh"):
