@@ -16,6 +16,7 @@ MOTION_YAML = REPO / "gear_sonic/config/manager_env/commands/terms/motion.yaml"
 TELEOP_PRESET = PRESET.with_name("sonic_r1_dex3_teleop.yaml")
 EVENTS = REPO / "gear_sonic/envs/manager_env/mdp/events.py"
 R1_EVENTS = REPO / "gear_sonic/envs/manager_env/mdp/r1_events.py"
+R1_REWARDS = REPO / "gear_sonic/envs/manager_env/mdp/r1_rewards.py"
 
 
 @pytest.fixture(scope="module", params=[PRESET, TELEOP_PRESET], ids=lambda p: p.stem)
@@ -224,3 +225,30 @@ def test_order_converter_registry():
     assert isinstance(oc.get_converter("g1_model_12_dex"), oc.G1Converter)
     with pytest.raises(KeyError):
         oc.get_converter("not_a_robot")
+
+
+def test_teleop_smooth_preset_replaces_the_jitter_terms():
+    """sonic_r1_dex3_teleop_smooth (PLAN.md D17): robust preset + smoothness terms + L2C2 trainer."""
+    hydra = pytest.importorskip("hydra")
+
+    from gear_sonic.utils import config_utils
+
+    config_utils.register_rl_resolvers()
+    exp = "+exp=manager/universal_token/all_modes/sonic_r1_dex3_teleop"
+    with hydra.initialize_config_dir(
+        config_dir=str(REPO / "gear_sonic/config"), version_base="1.1"
+    ):
+        robust = hydra.compose(config_name="base", overrides=[exp + "_robust"])
+        smooth = hydra.compose(config_name="base", overrides=[exp + "_smooth"])
+    assert smooth.trainer._target_.endswith("ppo_trainer_smooth.TRLSmoothPPOTrainer")
+    assert smooth.algo.config.entropy_coef == 0.0 and smooth.algo.config.std_clamp_max <= 0.25
+    assert smooth.algo.config.l2c2_policy_coef > 0
+    assert smooth.manager_env.events == robust.manager_env.events  # same randomization
+    r = smooth.manager_env.rewards
+    assert r._target_.endswith("r1_rewards.R1SmoothRewardsCfg")
+    assert r.action_rate_l2 is None and r.anti_shake_ang_vel is None
+    assert r.action_rate_l2_scaled.weight < 0 and r.action_acc_l2.weight < 0
+    assert r.anti_shake_rel_ang_vel.weight < 0 and r.tracking_wrist_linvel.weight > 0
+    declared = set(re.findall(r"^    (\w+) = None$", R1_REWARDS.read_text(), re.M))
+    added = {k for k in r if k != "_target_" and k not in robust.manager_env.rewards}
+    assert added <= declared, added - declared

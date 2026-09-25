@@ -7,3 +7,13 @@ rollout_video:
   num_frames: 500 # 10 s at 50 Hz
   egl_device: 0 # MuJoCo EGL device for the render subprocess
   wandb_key: video
+rollout_video_eval:
+  # The deterministic policy (what gets deployed), recorded during PeriodicEvalCallback's pass.
+  _target_: gear_sonic.trl.callbacks.rollout_video_callback.RolloutVideoCallback
+  video_dir: ${experiment_dir}/videos/eval
+  first_iteration: ${oc.select:callbacks.periodic_eval.first_iteration,null}
+  num_frames: 500
+  egl_device: 0
+  wandb_key: video_eval
+  arm_on_eval: true
+  eval_frequency: ${oc.select:callbacks.periodic_eval.eval_frequency,0} # 0: no periodic eval, off

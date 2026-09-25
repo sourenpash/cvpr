@@ -17,7 +17,7 @@
 #  * Uniform eval every 1000 iterations: with S1 and planner v3 (~2k clips) one eval takes ~7 min.
 
 defaults:
-  - manager/universal_token/all_modes/sonic_r1_dex3_teleop
+  - /exp/manager/universal_token/all_modes/sonic_r1_dex3_teleop
 
 manager_env:
   actions:

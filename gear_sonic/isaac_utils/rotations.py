@@ -661,9 +661,10 @@ def matrix_to_quaternion(matrix: torch.Tensor) -> torch.Tensor:
     # if not for numerical problems, quat_candidates[i] should be same (up to a sign),
     # forall i; we pick the best-conditioned one (with the largest denominator)
 
-    return quat_candidates[
-        F.one_hot(q_abs.argmax(dim=-1), num_classes=4) > 0.5, :  # pyre-ignore[16]
-    ].reshape(batch_dim + (4,))
+    # Pick the best candidate with gather instead of boolean-mask indexing: torch 2.6/2.7 CPU
+    # `nonzero` returns garbage indices on the training box (PLAN.md section 3.3).
+    best = q_abs.argmax(dim=-1)[..., None, None].expand(*batch_dim, 1, 4)
+    return torch.gather(quat_candidates, -2, best).reshape(batch_dim + (4,))
 
 
 def _sqrt_positive_part(x: torch.Tensor) -> torch.Tensor:
@@ -671,10 +672,8 @@ def _sqrt_positive_part(x: torch.Tensor) -> torch.Tensor:
     Returns torch.sqrt(torch.max(0, x))
     but with a zero subgradient where x is 0.
     """
-    ret = torch.zeros_like(x)
-    positive_mask = x > 0
-    ret[positive_mask] = torch.sqrt(x[positive_mask])
-    return ret
+    positive = x > 0  # torch.where, not boolean indexing (see matrix_to_quaternion)
+    return torch.where(positive, torch.sqrt(torch.where(positive, x, torch.ones_like(x))), 0.0)
 
 
 def quat_w_first(rot):

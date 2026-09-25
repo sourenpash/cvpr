@@ -61,16 +61,21 @@ class PeriodicEvalCallback(ImEvalCallback):
         self.first_iteration = first_iteration
         _register_metrics_only_smpl_sim()
 
+    # clip-name prefix -> group; everything else is "mocap"
+    GROUPS = {"planner_": "planner", "kimodo_": "kimodo"}
+
+    @classmethod
+    def group_of(cls, key: str) -> str:
+        return next((g for prefix, g in cls.GROUPS.items() if key.startswith(prefix)), "mocap")
+
     def _post_evaluate_policy(self, eval_res):
-        """Add success rates per clip group: planner-generated references vs mocap."""
+        """Add success rates per clip group: planner-generated, Kimodo-generated, mocap."""
         metrics = super()._post_evaluate_policy(eval_res)
         outcome = [(k, 0.0) for k in eval_res.get("failed_keys", [])]
         outcome += [(k, 1.0) for k in eval_res.get("success_keys", [])]
         self._outcome = {str(k): bool(ok) for k, ok in outcome}
-        for group in ("planner", "mocap"):
-            values = [
-                ok for k, ok in outcome if str(k).startswith("planner_") == (group == "planner")
-            ]
+        for group in ("planner", "kimodo", "mocap"):
+            values = [ok for k, ok in outcome if self.group_of(str(k)) == group]
             if values:
                 metrics[f"eval/success/success_rate_{group}"] = float(np.mean(values))
                 metrics[f"eval/success/num_clips_{group}"] = len(values)

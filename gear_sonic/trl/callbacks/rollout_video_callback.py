@@ -6,6 +6,11 @@ subprocess on another GPU (``scripts/r1/render_rollout_video.py``: reference gho
 human, palm targets) and log the mp4 under the W&B key ``video``. The npz and mp4 stay in
 ``video_dir``. Recording wraps ``env.step`` on the main process only; it reads a few tensors of
 env 0 per step while armed and nothing otherwise, so training is not slowed down.
+
+Training rollouts sample actions from the policy's Gaussian (std up to 0.5 action units), so
+they look far noisier than the deterministic policy. With ``arm_on_eval=True`` the recorder
+instead arms on the iterations where ``PeriodicEvalCallback`` evaluates (list it before that
+callback): the video then shows the deterministic policy that gets deployed.
 """
 
 from __future__ import annotations
@@ -42,16 +47,19 @@ class RolloutVideoCallback(TrainerCallback):
         wandb_key: str = "video",
         render_args: list | None = None,
         render_timeout_s: float = 900.0,
+        arm_on_eval: bool = False,
+        eval_frequency: int = 1000,
     ):
         super().__init__()
         self.video_dir = Path(video_dir).resolve()
         self.every = int(every_n_iterations)
-        self.first = int(first_iteration)
+        self.first = -1 if first_iteration is None else int(first_iteration)
         self.num_frames = int(num_frames)
         self.egl_device = str(egl_device)
         self.wandb_key = wandb_key
         self.render_args = [str(a) for a in (render_args or [])]
         self.render_timeout_s = render_timeout_s
+        self.arm_on_eval, self.eval_frequency = arm_on_eval, int(eval_frequency)
         self._command = None
         self._recording = None  # dict of lists while armed
         self._rec_iteration = 0
@@ -59,7 +67,8 @@ class RolloutVideoCallback(TrainerCallback):
 
     # ------------------------------------------------------------------ setup
     def on_train_begin(self, args, state, control, env=None, **kwargs):
-        if env is None or not state.is_world_process_zero or self.every <= 0:
+        off = self.every <= 0 or (self.arm_on_eval and self.eval_frequency <= 0)
+        if env is None or not state.is_world_process_zero or off:
             return
         base = env.env.unwrapped
         self._command = base.command_manager.get_term("motion")
@@ -79,7 +88,7 @@ class RolloutVideoCallback(TrainerCallback):
 
         def recording_step(*a, **kw):
             out = step(*a, **kw)
-            if self._recording is not None:
+            if self._recording is not None and len(self._recording["robot_q"]) < self.num_frames:
                 self._capture()
             return out
 
@@ -181,7 +190,11 @@ class RolloutVideoCallback(TrainerCallback):
         if last:
             return
         if self._recording is None:
-            if it >= self.first and (it - self.first) % self.every == 0:
+            if self.arm_on_eval:  # the evaluation that follows in this on_step_end round
+                due = it == self.first or (it > 0 and it % self.eval_frequency == 0)
+            else:
+                due = it >= self.first and (it - self.first) % self.every == 0
+            if due:
                 self._recording = defaultdict(list)
                 self._rec_iteration = it
         elif len(self._recording["robot_q"]) >= self.num_frames:

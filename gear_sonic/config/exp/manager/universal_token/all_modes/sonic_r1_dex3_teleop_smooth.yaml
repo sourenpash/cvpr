@@ -1,0 +1,68 @@
+# @package _global_
+# Stage B2 of the Quest teleop policy (PLAN.md D17): the robust preset plus smoothness and
+# gesture terms. Deterministic MuJoCo rollouts of B+ put ~14 % of arm joint-velocity power above
+# 5 Hz (reference: 0.5 %); a literature survey (docs/r1/SMOOTHNESS.md) ranked these fixes:
+#
+#  * Exploration std: SONIC's std clamp [0.001, 0.5] with entropy 0.01 let every arm std sit at
+#    0.5 (the noise alone costs ~13 % of the tracking reward through the action-rate penalty).
+#    Here entropy 0 and a 0.25 cap (PHC / AMP use a fixed small std and no entropy bonus).
+#  * L2C2 temporal smoothness loss on the action mean (AGILE 2603.20147, HoST 2502.08378):
+#    trainer TRLSmoothPPOTrainer, coefficient 1.0 on half of each micro-batch's environments.
+#  * Rewards (mdp/smoothness.py): action second difference; action rate per joint with the
+#    G1-scale correction (softened: hips/knees x3, hip yaw and waist x4, ankles x1.5, arms x1.2);
+#    anti-shake on wrist/torso angular velocity relative to the reference (deadzone 0.5 rad/s)
+#    instead of SONIC's absolute 1.5 rad/s; wrist linear-velocity tracking for crisp gestures.
+#
+# Data: ++manager_env.commands.motion.motion_lib_cfg.motion_file=data/motion_lib_r1/B2
+# Warm start: checkpoint=<a sonic_r1_dex3_teleop_robust checkpoint>
+
+defaults:
+  - /exp/manager/universal_token/all_modes/sonic_r1_dex3_teleop_robust
+
+trainer:
+  _target_: gear_sonic.trl.trainer.ppo_trainer_smooth.TRLSmoothPPOTrainer
+
+algo:
+  config:
+    entropy_coef: 0.0
+    std_clamp_max: 0.25
+    l2c2_policy_coef: 1.0
+    l2c2_fraction: 0.5
+
+manager_env:
+  rewards:
+    _target_: gear_sonic.envs.manager_env.mdp.r1_rewards.R1SmoothRewardsCfg
+    action_rate_l2: null # replaced by the per-joint version below
+    anti_shake_ang_vel: null # replaced by the reference-relative version below
+    action_rate_l2_scaled:
+      _target_: isaaclab.managers.RewardTermCfg
+      func: gear_sonic.envs.manager_env.mdp.smoothness:action_rate_l2_scaled
+      weight: -0.1
+      params:
+        multipliers:
+          ".*_hip_(pitch|roll)_joint": 3.0
+          ".*_knee_joint": 3.0
+          ".*_hip_yaw_joint": 4.0
+          "waist_.*_joint": 4.0
+          ".*_ankle_.*_joint": 1.5
+          ".*_(shoulder_.*|elbow|wrist_roll)_joint": 1.2
+    action_acc_l2:
+      _target_: isaaclab.managers.RewardTermCfg
+      func: gear_sonic.envs.manager_env.mdp.smoothness:action_acc_l2
+      weight: -0.03
+    anti_shake_rel_ang_vel:
+      _target_: isaaclab.managers.RewardTermCfg
+      func: gear_sonic.envs.manager_env.mdp.smoothness:anti_shake_rel_ang_vel
+      weight: -0.02
+      params:
+        command_name: "motion"
+        threshold: 0.5
+        body_names: ["left_wrist_roll_link", "right_wrist_roll_link", "torso_link"]
+    tracking_wrist_linvel:
+      _target_: isaaclab.managers.RewardTermCfg
+      func: gear_sonic.envs.manager_env.mdp:tracking_body_linvel_error
+      weight: 0.5
+      params:
+        command_name: "motion"
+        std: 0.5
+        body_names: ["left_wrist_roll_link", "right_wrist_roll_link"]
