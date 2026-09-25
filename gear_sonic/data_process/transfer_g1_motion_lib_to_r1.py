@@ -392,7 +392,32 @@ def _iter_bones_csv_files(root: Path):
         yield p
 
 
-def _load_g1_entries_from_csv(csv_path: Path, fps: int, fps_source: int | None) -> dict:
+def _load_qpos_csv(csv_path: Path, fps: int) -> dict:
+    """MuJoCo qpos rows (root xyz, root quat wxyz, 29 G1 joints; Kimodo-G1's CSV) -> G1 entry."""
+    rows = []
+    for line in csv_path.read_text().splitlines():
+        try:
+            rows.append([float(x) for x in line.split(",")])
+        except ValueError:  # a header line
+            continue
+    qpos = np.asarray(rows, dtype=np.float32)
+    if qpos.ndim != 2 or qpos.shape[1] != 36:
+        raise ValueError(f"{csv_path}: expected (T, 36) qpos rows, got {qpos.shape}")
+    return {
+        csv_path.stem: {
+            "root_trans_offset": qpos[:, :3],
+            "root_rot": qpos[:, [4, 5, 6, 3]],  # wxyz -> xyzw
+            "dof": qpos[:, 7:],
+            "fps": float(fps),
+        }
+    }
+
+
+def _load_g1_entries_from_csv(
+    csv_path: Path, fps: int, fps_source: int | None, csv_format: str = "bones"
+) -> dict:
+    if csv_format == "qpos":
+        return _load_qpos_csv(csv_path, fps)
     sys.path.insert(0, str(REPO / "gear_sonic/data_process"))
     import convert_soma_csv_to_motion_lib as conv  # noqa: PLC0415
 
@@ -404,7 +429,7 @@ def _load_g1_entries_from_csv(csv_path: Path, fps: int, fps_source: int | None) 
 
 
 def _process_file(args_tuple):
-    src, rel_out, mode, fps, fps_source, max_clamp, max_vel, dry_run = args_tuple
+    src, rel_out, mode, fps, fps_source, max_clamp, max_vel, dry_run, csv_format = args_tuple
     import warnings
 
     warnings.filterwarnings("ignore")
@@ -412,7 +437,7 @@ def _process_file(args_tuple):
     if mode == "pkl":
         data = joblib.load(src)
     else:
-        data = _load_g1_entries_from_csv(Path(src), fps, fps_source)
+        data = _load_g1_entries_from_csv(Path(src), fps, fps_source, csv_format)
     out_entries, stats_list = {}, []
     for name, entry in data.items():
         try:
@@ -448,6 +473,12 @@ def main() -> None:
     ap.add_argument("--fps", type=int, default=30, help="output fps for CSV inputs")
     ap.add_argument(
         "--fps_source", type=int, default=None, help="source fps for CSV inputs (Bones-SEED: 120)"
+    )
+    ap.add_argument(
+        "--csv-format",
+        choices=["bones", "qpos"],
+        default="bones",
+        help="bones: Bones-SEED CSV (deg, cm, Euler); qpos: MuJoCo qpos rows (Kimodo-G1)",
     )
     ap.add_argument("--num_workers", type=int, default=8)
     ap.add_argument(
@@ -499,6 +530,7 @@ def main() -> None:
                 args.max_clamp_frac,
                 args.max_vel_frac,
                 args.dry_run,
+                args.csv_format,
             )
         )
 

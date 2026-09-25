@@ -21,8 +21,10 @@ Keep this rather than switching the encoder to a velocity command:
 - Velocity controllers take 3.5x more, smaller steps (OpenHLM 2606.22174).
 - Simplified commands cannot express complex leg patterns (ULC 2507.06905).
 
-**Train with the planner in the loop.** A tracker trained on clean mocap reached 0.23 success on a
-generator's output. Fine-tuning with the generator in the loop brought it to ~0.99 (2604.17335).
+**Train with the planner in the loop.** 2604.17335 couples a motion generator with a tracker and
+fine-tunes the tracker with the generator in the closed loop. On 80 cm box climbing, the tracker
+following a fixed reference succeeded 23 % of the time; with online generation and closed-loop
+fine-tuning, 96 %. On 25 cm stairs the numbers are 11 % vs 99 % (Table III of the HTML version).
 
 **Implemented:**
 - `scripts/r1/planner_loop.py` ports the deployed C++ planner loop: 10 Hz replanning, 30->50 Hz

@@ -110,7 +110,8 @@ Task IDs (M = Mac-side, G = GPU-box) are referenced from §5.
   clips (1.2 h, D14), with VR target noise, evaluating at iteration 1 and every 500.
   **Baseline eval (iteration 1, the 250-iteration teleop policy, training terminations):
   success 76.5 % overall, 89.8 % on mocap clips but 45.0 % on planner-generated walking**
-  (the generator gap of 2604.17335); MPJPE-L 30.1 mm, VR 3-point 23.9 mm.
+  (a generator gap, as 2604.17335 found for fixed vs generated references); MPJPE-L 30.1 mm,
+  VR 3-point 23.9 mm.
   Console log `logs_rl/console/teleop_stage_a2.log`. Stage B (robustness,
   `sonic_r1_dex3_teleop_robust.yaml`, D15) is prepared. Open items and the literature behind
   each fix: `docs/r1/DEMO_READINESS.md`.
@@ -191,6 +192,25 @@ Task IDs (M = Mac-side, G = GPU-box) are referenced from §5.
   - **DDS closed loop:** 45 s of stand-up, shadow, blend, walking + reaching, gantry released at 9 s. No trips; tick period p50 20.0 ms, p95 21.0 ms, max 23.2 ms; max tilt 12°.
   - Open: the hardware checks (`robot_unitree.py --check`), a Dex3 hold pose.
 - [ ] **Q5** Real-robot bring-up and demo takes.
+- [~] **Q6 Smoothness and gestures, stage B2** (D17). Preset `sonic_r1_dex3_teleop_smooth.yaml`, run `sonic_r1_dex3_teleop_smooth_stage_b2`, launched 2026-09-25 14:02 from B+ iteration 5000 (`r1_init/teleop_bplus_it5000.pt`). Log `logs_rl/console/teleop_stage_b2.log`.
+  - **Why.** B+ jitters in MuJoCo (`scripts/r1/teleop/sim_gate.py`, 60 s walk + wave, #51 actuators):
+    - joint-velocity content above 5 Hz: arms 0.18 rad/s RMS, 14 % of their motion power (their IK targets: 0.5 %); legs 0.35 rad/s, 14 % (the planner's own legs: about 0.2 rad/s);
+    - standing still is steady (0.005 rad/s).
+    - The action std sits at its 0.5 cap on every arm joint.
+  - **Changes:**
+    - entropy 0, std cap 0.25;
+    - L2C2 loss on the action mean (`trl/trainer/ppo_trainer_smooth.py`);
+    - action second-difference penalty;
+    - per-joint action-rate penalty with the G1-scale correction;
+    - anti-shake relative to the reference;
+    - wrist-velocity tracking (`mdp/smoothness.py`, `mdp/r1_rewards.py`).
+
+    Literature and measurements: `docs/r1/SMOOTHNESS.md`.
+  - **Data B2**, 2717 clips = B + S2 + K1_ok:
+    - **S2:** 628 real mocap gesture clips (wave, point, beckon, greet, clap), including mirrored captures (`curate_bones_gestures.py`).
+    - **K1_ok:** 214 Kimodo-G1 clips (`generate_kimodo_motions.py`, `kimodo_quality.py`); 289 transferred, 336 generated.
+  - **Kimodo fix.** Its text encoder returned all-zero embeddings under torch 2.6/2.7 on this machine, so every prompt gave the same motion. Embeddings now come from `kimodo_text_embeddings.py` in the `llm2vec` env (torch 2.8).
+  - **Rendering.** `video_eval` renders the deterministic policy during every periodic evaluation.
 
 ---
 
@@ -243,6 +263,14 @@ wrist joint; one measurement on the robot settles both projects.
 | `commands.py:4198-4218` (`ForceTrackingCommand`, 6×17 Jacobian) | G1 arm joint lists | **not on our path**; would need R1 lists if force tracking is ever enabled |
 | `im_eval_callback.py` (VR 3-point eval subset) | `left/right_wrist_yaw_link` by name | last arm link present (`wrist_yaw`, else `wrist_roll`); G1 unchanged |
 | `data_process/convert_soma_csv_to_motion_lib.py` | hard-coded G1 axes | use `transfer_g1_motion_lib_to_r1.py` instead (accepts the same CSVs) |
+| `isaac_utils/rotations.py` (`matrix_to_quaternion`, `_sqrt_positive_part`) | boolean-mask indexing (`nonzero`) | `torch.gather` / `torch.where`, bit-identical. Reason: see the note below |
+| `eval_agent_trl.py` ONNX export | needs a live env, exports smpl/g1 encoders | not changed; `scripts/r1/export_teleop_onnx.py` exports on CPU |
+
+**Torch 2.6/2.7 CPU bug on `asblab`** (`sonic-train`, `kimodo` envs; torch 2.8 and 2.14 are fine):
+- Some CPU reductions and boolean indexing return garbage on large tensors, e.g. `bool.sum()` gives 2^40 + n.
+- It crashed B+'s iteration-5000 evaluation: in a motion-library loading worker, `x[mask]` got index 7e13.
+- It also made Kimodo's CPU text encoder output zeros (`docs/r1/SMOOTHNESS.md` §4).
+- The GPU paths are unaffected. Other CPU code in the training env may still be exposed; a torch upgrade in `sonic-train` would need an Isaac smoke test first.
 
 ### 3.4 Network shapes that change (drives M6)
 
@@ -514,7 +542,8 @@ caveat (position tracked strongly; orientation reduced to palm-normal).
   the R1's lower-body joints by name, as the training data does — to verify in G7.
 - **D14 Planner-in-the-loop data and contact-corrected transfer** — SONIC's VR_3PT mode feeds
   the teleop encoder planner-generated legs, and a tracker trained only on clean mocap breaks
-  on generator artifacts (2604.17335: 0.23 -> ~0.99 success with the generator in the loop).
+  on generator artifacts (2604.17335, 80 cm box climbing: 23 % success following a fixed
+  reference vs 96 % with online generation and closed-loop fine-tuning).
   `scripts/r1/planner_loop.py` ports the deployed planner loop; `generate_planner_motions.py`
   drives it with Quest-like stick scripts and transfers the G1 output like BONES-SEED. The
   transfer now pins stance feet and grounds soles per frame (contacts detected on the G1
@@ -534,6 +563,15 @@ caveat (position tracked strongly; orientation reduced to palm-normal).
   - Upward friction randomization, because unloaded backdriving under-measures loaded legs. The commenter's sim-trained policy walked on the real R1 on the first try.
   - Friction goes in as Isaac Sim 5 static = dynamic efforts. The one-joint unit test (`scripts/r1/isaac_joint_friction_test.py`) hung at startup. Instead, B+'s iteration-1 eval checks the units: a coefficient × joint reaction force would lock the legs.
   - `EventCfg` only accepts declared terms, hence `mdp/r1_events.py:R1RobustEventCfg`.
+- **D17 Smoothness is trained, not filtered** (2026-09-25).
+  - The survey (`docs/r1/SMOOTHNESS.md`) found no real-humanoid evidence that action low-pass filters or Lipschitz penalties beat temporal regularization, and filters add latency to the VR loop.
+  - B2 therefore:
+    - stops the exploration std from growing (entropy 0, cap 0.25);
+    - adds L2C2 on the action mean (AGILE 2603.20147, HoST 2502.08378);
+    - adds reward-side penalties that spare 1–3 Hz gestures: a second difference, and a per-joint action rate corrected for our G1 action scale;
+    - makes anti-shake relative to the reference.
+  - Gates: arm high-frequency share ≤ 2 % in `sim_gate.py`; success within a point of B+.
+  - Gesture data: real mocap first (S2), with Kimodo filling specific gestures (≤ 10 % of the mix).
 
 ## 7. Risks
 
