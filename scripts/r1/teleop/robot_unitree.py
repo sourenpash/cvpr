@@ -14,7 +14,9 @@ in zero torque and watch ``python scripts/r1/teleop/robot_unitree.py --check <if
 
 All DDS traffic runs in a child process: at 500 Hz it takes ``lowstate`` and publishes
 ``lowcmd`` (training PD gains, ``mode_pr`` = PR for the ankles, ``mode_machine`` copied from
-``lowstate``, CRC). Python (de)serialization of these messages costs ~0.5 ms each, which in the
+``lowstate``, CRC), and at 100 Hz the Dex3 finger targets on ``rt/dex3/{left,right}/cmd``
+(``hands.py``; the fingers hold a semi-closed pose unless the operator shapes them, and go limp
+in damping). Python (de)serialization of these messages costs ~0.5 ms each, which in the
 policy process would starve the 50 Hz loop of the GIL. The processes share the latest state
 and the joint targets through shared memory. IMU quaternion (w, x, y, z), gyro in the body frame.
 """
@@ -96,6 +98,8 @@ class _Shared:
         self.imu = CTX.Array("d", 7, lock=False)  # quat (4), gyro (3)
         self.head_q = CTX.Array("d", 2, lock=False)
         self.remote = CTX.Array("B", 40, lock=False)
+        self.hands = CTX.Array("d", 14, lock=False)  # Dex3 targets, motor order, left then right
+        self.hand_mode = CTX.Value("i", PASSIVE, lock=False)
         self.t_state = CTX.Value("d", 0.0, lock=False)
         self.stop = CTX.Event()
 
@@ -104,9 +108,13 @@ def _dds_process(shared: _Shared, slots, kp, kd, head_kp, head_kd, damping_kd, d
     from cyclonedds.qos import Policy, Qos
     from cyclonedds.sub import DataReader
     from cyclonedds.topic import Topic
+    from hands import KD as HAND_KD, KP as HAND_KP, ris_mode
     from unitree_sdk2py.core.channel import ChannelFactory, ChannelPublisher
-    from unitree_sdk2py.idl.default import unitree_hg_msg_dds__LowCmd_
-    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import LowCmd_, LowState_
+    from unitree_sdk2py.idl.default import (
+        unitree_hg_msg_dds__HandCmd_,
+        unitree_hg_msg_dds__LowCmd_,
+    )
+    from unitree_sdk2py.idl.unitree_hg.msg.dds_ import HandCmd_, LowCmd_, LowState_
     from unitree_sdk2py.utils.crc import CRC
 
     dds_init(domain, interface)
@@ -118,8 +126,13 @@ def _dds_process(shared: _Shared, slots, kp, kd, head_kp, head_kd, damping_kd, d
     pub = ChannelPublisher("rt/lowcmd", LowCmd_)
     pub.Init()
     cmd, crc = unitree_hg_msg_dds__LowCmd_(), CRC()
+    hand_pubs, hand_cmds = {}, {}
+    for side in ("left", "right"):
+        hand_pubs[side] = ChannelPublisher(f"rt/dex3/{side}/cmd", HandCmd_)
+        hand_pubs[side].Init()
+        hand_cmds[side] = unitree_hg_msg_dds__HandCmd_()
     state = None
-    period, t_next = 0.002, time.perf_counter()
+    period, t_next, tick = 0.002, time.perf_counter(), 0
     while not shared.stop.is_set():
         samples = [x for x in reader.take(N=4) if isinstance(x, LowState_)]
         msg = samples[-1] if samples else None
@@ -154,6 +167,17 @@ def _dds_process(shared: _Shared, slots, kp, kd, head_kp, head_kd, damping_kd, d
                     m.kp = head_kp if mode == POSITION else 0.0
                 cmd.crc = crc.Crc(cmd)
                 pub.Write(cmd)
+        hand_mode = shared.hand_mode.value
+        if hand_mode != PASSIVE and tick % 5 == 0:  # 100 Hz
+            with shared.lock:
+                hand_q = list(shared.hands[:])
+            for h, side in enumerate(("left", "right")):
+                for i, m in enumerate(hand_cmds[side].motor_cmd):
+                    m.mode, m.dq, m.tau, m.kd = ris_mode(i), 0.0, 0.0, HAND_KD
+                    m.q = float(hand_q[7 * h + i])
+                    m.kp = HAND_KP if hand_mode == POSITION else 0.0
+                hand_pubs[side].Write(hand_cmds[side])
+        tick += 1
         t_next += period
         time.sleep(max(0.0, t_next - time.perf_counter()))
 
@@ -216,9 +240,20 @@ class UnitreeR1:
             self.shared.target[:] = [float(x) for x in target]
             self.shared.command[:] = [POSITION, kp_scale]
 
+    def hands(self, left: np.ndarray, right: np.ndarray) -> None:
+        """Dex3 finger targets (``hands.FINGERS`` order per hand); starts the hand commands."""
+        from hands import to_motor_order
+
+        q = np.concatenate([to_motor_order(left, "left"), to_motor_order(right, "right")])
+        with self.shared.lock:
+            self.shared.hands[:] = [float(x) for x in q]
+            self.shared.hand_mode.value = POSITION
+
     def damping(self) -> None:
         with self.shared.lock:
             self.shared.command[0] = DAMPING
+            if self.shared.hand_mode.value != PASSIVE:
+                self.shared.hand_mode.value = DAMPING
 
     def close(self) -> None:
         self.damping()

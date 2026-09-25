@@ -17,6 +17,7 @@ TELEOP_PRESET = PRESET.with_name("sonic_r1_dex3_teleop.yaml")
 EVENTS = REPO / "gear_sonic/envs/manager_env/mdp/events.py"
 R1_EVENTS = REPO / "gear_sonic/envs/manager_env/mdp/r1_events.py"
 R1_REWARDS = REPO / "gear_sonic/envs/manager_env/mdp/r1_rewards.py"
+SMOOTHNESS = REPO / "gear_sonic/envs/manager_env/mdp/smoothness.py"
 
 
 @pytest.fixture(scope="module", params=[PRESET, TELEOP_PRESET], ids=lambda p: p.stem)
@@ -243,6 +244,8 @@ def test_teleop_smooth_preset_replaces_the_jitter_terms():
     assert smooth.trainer._target_.endswith("ppo_trainer_smooth.TRLSmoothPPOTrainer")
     assert smooth.algo.config.entropy_coef == 0.0 and smooth.algo.config.std_clamp_max <= 0.25
     assert smooth.algo.config.l2c2_policy_coef > 0
+    assert list(smooth.algo.config.l2c2_keys) == ["actor_obs"]  # never the tokenizer (B2)
+    assert "actor_obs" in smooth.algo.config.actor.backbone.proprioception_features
     assert smooth.manager_env.events == robust.manager_env.events  # same randomization
     r = smooth.manager_env.rewards
     assert r._target_.endswith("r1_rewards.R1SmoothRewardsCfg")
@@ -252,3 +255,27 @@ def test_teleop_smooth_preset_replaces_the_jitter_terms():
     declared = set(re.findall(r"^    (\w+) = None$", R1_REWARDS.read_text(), re.M))
     added = {k for k in r if k != "_target_" and k not in robust.manager_env.rewards}
     assert added <= declared, added - declared
+
+
+def test_teleop_calm_preset_adds_only_the_calm_terms():
+    """sonic_r1_dex3_teleop_calm (PLAN.md D18): the smooth preset + stance-foot and leg-velocity terms."""
+    hydra = pytest.importorskip("hydra")
+
+    from gear_sonic.utils import config_utils
+
+    config_utils.register_rl_resolvers()
+    exp = "+exp=manager/universal_token/all_modes/sonic_r1_dex3_teleop"
+    with hydra.initialize_config_dir(
+        config_dir=str(REPO / "gear_sonic/config"), version_base="1.1"
+    ):
+        smooth = hydra.compose(config_name="base", overrides=[exp + "_smooth"])
+        calm = hydra.compose(config_name="base", overrides=[exp + "_calm"])
+    assert calm.trainer == smooth.trainer and calm.manager_env.events == smooth.manager_env.events
+    r, r0 = calm.manager_env.rewards, smooth.manager_env.rewards
+    assert {k for k in r if r[k] != r0.get(k)} == {"stance_foot_motion", "leg_joint_vel_error"}
+    feet = r.stance_foot_motion.params.foot_names
+    assert r.stance_foot_motion.weight < 0 and r.leg_joint_vel_error.weight < 0
+    assert set(feet) <= set(calm.manager_env.commands.motion.body_names), feet
+    for term in (r.stance_foot_motion, r.leg_joint_vel_error):
+        assert term.func.startswith("gear_sonic.envs.manager_env.mdp.smoothness:")
+        assert term.func.split(":")[1] in SMOOTHNESS.read_text()

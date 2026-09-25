@@ -55,6 +55,15 @@ Preset `sonic_r1_dex3_teleop_smooth.yaml`, warm-started from B+.
 - Eval success down by at most 1 point versus B+.
 - VR 3-point and MPJPE-L errors up by at most 5 %.
 
+**Outcome (stopped at iteration ~1030):**
+- Smoother: arms above 5 Hz 0.09 rad/s RMS vs 0.18 for B+, legs 0.23 vs 0.36.
+- Failed the success gate by far: Isaac uniform success 0.706 vs 0.845 (walking clips 0.47 vs 0.75).
+- Cause: L2C2 interpolated the tokenizer observations too, which trains SONIC's FSQ encoder to hold its token while the reference moves; the 3–4× leg action-rate multipliers add lag.
+- Corrected in the preset, which B3 inherits:
+  - L2C2 at 0.5 on the proprioception only (`l2c2_keys: ["actor_obs"]`);
+  - leg multipliers 1.5–2.
+- Frictionless actuators jitter more in MuJoCo than the measured #51 ones, so the jitter is the policy's own feedback, not a friction artifact.
+
 ## 4. Kimodo on this machine
 
 Kimodo's text encoder is LLM2Vec on Llama-3-8B, run on the CPU.
@@ -68,3 +77,21 @@ The fix:
 - Pass them to `generate_kimodo_motions.py --text-embeddings`.
 
 With real embeddings, every wave, point, beckon and arms-up sample raised the requested hand.
+
+## 5. Calm motion, stage B3 (D18)
+
+The user asked for no balance steps, somewhat slower motion and predictable behaviour, with as
+little unnecessary motion as possible. The work is split between the runtime and the reward:
+
+- **Runtime** (`run.py` defaults):
+  - walking ≤ 0.5 m/s and turning ≤ 0.6 rad/s (SONIC's gamepad: 0.8 m/s, 1 rad/s);
+  - a critically damped joint-space filter on the IK targets (τ 0.04 s): a 1.5 Hz wave keeps about 87 % of its amplitude and 6 Hz shake about 30 %;
+  - speed limits: arms 3 rad/s, waist 1 rad/s;
+  - the planner holds the stand-up stance until the sticks first move.
+- **Reward** (`sonic_r1_dex3_teleop_calm.yaml`). Both terms measure motion the reference does not ask for, so perfect tracking scores zero:
+  - `stance_foot_motion` (−2): Σ over feet of |v_foot − v_foot_ref|² while the reference foot stands. This is the contact-mismatch / feet-slip idea of legged_gym, ASAP 2502.01143 and PBHC 2506.12851, made relative so the reference's own heel and toe rolls cost nothing.
+  - `leg_joint_vel_error` (−0.003): Σ (dq − dq_ref)² over the legs. It is about 10 (rad/s)² for B2 in MuJoCo, so the term is ~−0.03 per second, the size of the other smoothness terms.
+- **Measurement** (`sim_gate.py`):
+  - `unplanned_steps`: foot lifts ≥ 0.1 s while the reference foot has stood ≥ 0.3 s, which excludes the policy finishing a reference step late;
+  - `idle_foot_drift_mm`: foot displacement while the reference stands completely still.
+  - Under the old runtime, B+ drifted 49 mm and B2 (iteration 500) 30 mm in the 20 s stand test, mostly by following the planner's settling step.

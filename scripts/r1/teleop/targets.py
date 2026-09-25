@@ -17,6 +17,11 @@ The R1's arms have 5 DOF and no wrist pitch/yaw, so a raw controller orientation
 unreachable. A damped-least-squares IK on the upper body (pelvis fixed) projects the targets; the
 policy then gets the forward kinematics of that solution: palm points on the wrist roll links,
 the head point on the torso, and the body orientations, all in the pelvis frame, as in training.
+
+Between the IK and the policy, :class:`JointSmoother` keeps the upper body calm and predictable
+(user request 2026-09-25): a critically damped filter per joint with a speed limit, so a fast or
+jerky operator motion reaches the robot smooth and no faster than ``max_arm_speed``. In joint
+space the filtered targets stay reachable.
 """
 
 from __future__ import annotations
@@ -139,6 +144,39 @@ class UpperBodyIK:
         self.q = self.q0.copy()
 
 
+class JointSmoother:
+    """Critically damped second-order filter per joint, with a speed limit.
+
+    Exact for a target held over the step, so stable for any ``tau``. Keeps ~87 % of a 1.5 Hz
+    wave at ``tau`` = 0.04 s and ~30 % of 6 Hz shake. The speed limit clamps each step (the
+    critically damped filter then cannot overshoot after it). ``tau`` = 0 applies only the limit.
+    """
+
+    def __init__(self, tau: float, max_speed: np.ndarray):
+        self.omega = 1.0 / tau if tau > 0 else 0.0
+        self.max_speed = np.asarray(max_speed, float)
+        self.q: np.ndarray | None = None
+        self.v: np.ndarray | None = None
+
+    def reset(self, q: np.ndarray) -> None:
+        self.q, self.v = np.array(q, float), np.zeros(len(q))
+
+    def __call__(self, target: np.ndarray, dt: float) -> np.ndarray:
+        if self.q is None:
+            self.reset(target)
+        if self.omega > 0:
+            e0, w = self.q - target, self.omega
+            decay, tmp = np.exp(-w * dt), (self.v + w * e0) * dt
+            q, v = target + (e0 + tmp) * decay, (self.v - w * tmp) * decay
+        else:
+            q, v = np.asarray(target, float), (target - self.q) / dt
+        limit = self.max_speed * dt
+        step = np.clip(q - self.q, -limit, limit)
+        self.v = np.where(np.abs(q - self.q) > limit, step / dt, v)
+        self.q = self.q + step
+        return self.q.copy()
+
+
 @dataclass
 class Calibration:
     """Operator reference captured in the calibration pose (robot-convention world axes)."""
@@ -162,6 +200,9 @@ class VRTargets:
         max_head_yaw: float = 0.6,
         max_head_roll: float = 0.25,
         waist_gain: float = 1.0,
+        smooth_tau: float = 0.04,
+        max_arm_speed: float = 3.0,
+        max_waist_speed: float = 1.0,
     ):
         self.ik = UpperBodyIK()
         self.scale, self.max_yaw, self.max_roll = scale, max_head_yaw, max_head_roll
@@ -170,13 +211,23 @@ class VRTargets:
         self.palm0 = {s: default[f"{s}_palm"].copy() for s in ARMS}
         self.wrist_R0 = {s: default[f"{s}_wrist_R"].copy() for s in ARMS}
         self.calib: Calibration | None = None
+        ik = self.ik
+        waist = [ik.waist_q["roll"], ik.waist_q["yaw"]]
+        self.upper = np.array(waist + [a for s in ARMS for a in ik.arm_q[s]])
+        speed = [max_waist_speed] * len(waist) + [max_arm_speed] * (len(self.upper) - len(waist))
+        self.smoother = JointSmoother(smooth_tau, np.array(speed))
+        self.smoother.reset(ik.q0[self.upper])
+        self.q = ik.q0.copy()  # the smoothed solution the policy is given
 
     def calibrate(self, head: np.ndarray, left: np.ndarray, right: np.ndarray) -> None:
         self.calib = Calibration(head.copy(), left.copy(), right.copy())
         self.ik.reset()
+        self.smoother.reset(self.ik.q0[self.upper])
 
-    def solve(self, head: np.ndarray, left: np.ndarray, right: np.ndarray) -> dict[str, np.ndarray]:
-        """IK solution for the current Quest poses (calibrated); returns :meth:`terms`."""
+    def solve(
+        self, head: np.ndarray, left: np.ndarray, right: np.ndarray, dt: float = 0.02
+    ) -> dict[str, np.ndarray]:
+        """IK solution for the current Quest poses (calibrated), smoothed; returns :meth:`terms`."""
         c = self.calib
         assert c is not None, "calibrate() first"
         to_op = yaw_matrix(-c.yaw)  # world -> operator heading frame (x forward, z up)
@@ -190,10 +241,17 @@ class VRTargets:
             target = self.palm0[side] + self.scale * (to_op @ disp)
             dR = to_op @ now[:3, :3] @ ref[:3, :3].T @ to_op.T
             self.ik.solve_arm(side, target, dR @ self.wrist_R0[side])
-        return self.terms()
+        self.q = self.ik.q.copy()
+        self.q[self.upper] = self.smoother(self.ik.q[self.upper], dt)
+        return self.terms(self.q)
 
     def terms(self, q: np.ndarray | None = None) -> dict[str, np.ndarray]:
-        """``vr_3point_local_target`` (9) and ``vr_3point_local_orn_target`` (12), w >= 0."""
+        """``vr_3point_local_target`` (9) and ``vr_3point_local_orn_target`` (12), w >= 0.
+
+        For the joint configuration ``q`` (default: the latest smoothed solution); ``q`` and the
+        raw IK solution ``q_ik`` are returned too.
+        """
+        q = self.q if q is None else q
         f = self.ik.fk(q)
         pos = np.concatenate([f["left_palm"], f["right_palm"], f["head"]])
         quats = [f["left_wrist_R"], f["right_wrist_R"], f["torso_R"]]
@@ -201,7 +259,8 @@ class VRTargets:
         return {
             "vr_3point_local_target": pos,
             "vr_3point_local_orn_target": quat,
-            "q": self.ik.q.copy(),
+            "q": np.array(q, float),
+            "q_ik": self.ik.q.copy(),
         }
 
 

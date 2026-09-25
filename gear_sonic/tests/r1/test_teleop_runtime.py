@@ -180,3 +180,109 @@ def test_watchdog_trips():
     assert "old" in w.check(ok, state_age=0.1)
     assert "non-finite" in w.check(ok, obs=np.array([np.nan]))
     assert "remote" in w.check(dict(ok, remote={"B": True}))
+
+
+def test_joint_smoother_is_speed_limited_and_settles_without_overshoot():
+    targets = pytest.importorskip("targets")
+    dt = 0.02
+    for tau in (0.04, 0.0):
+        s = targets.JointSmoother(tau, np.array([3.0]))
+        s.reset(np.zeros(1))
+        q = np.array([s(np.ones(1), dt)[0] for _ in range(100)])
+        steps = np.diff(np.r_[0.0, q])
+        assert steps.max() <= 3.0 * dt + 1e-12 and q.max() <= 1.0 + 1e-9, (tau, steps.max())
+        assert abs(q[-1] - 1.0) < 1e-3, (tau, q[-1])
+    # a 1.5 Hz wave within the speed limit keeps most of its amplitude; 6 Hz shake does not
+    s = targets.JointSmoother(0.04, np.array([10.0]))
+    t = np.arange(400) * dt
+    for hz, lo, hi in ((1.5, 0.8, 1.0), (6.0, 0.0, 0.5)):
+        s.reset(np.zeros(1))
+        out = np.array([s(np.array([0.3 * np.sin(2 * np.pi * hz * x)]), dt)[0] for x in t])
+        assert lo < np.abs(out[200:]).max() / 0.3 < hi, (hz, np.abs(out[200:]).max())
+
+
+def test_hand_shaper_holds_semi_closed_and_follows_grip_and_trigger():
+    hands = pytest.importorskip("hands")
+    from quest import QuestSample
+
+    shaper = hands.HandShaper(tau=0.0)
+    idle = QuestSample(t=0.0, head=np.eye(4), left=np.eye(4), right=np.eye(4))
+    q = shaper(idle, 0.02)
+    assert np.allclose(q["left"], hands.pose("hold", "left"))
+    assert np.allclose(q["right"], hands.pose("hold", "right"))
+    for trigger, grip, name in ((1.0, 1.0, "fist"), (0.0, 1.0, "point"), (1.0, 0.0, "pinch")):
+        sample = QuestSample(
+            t=0.0, head=np.eye(4), left=np.eye(4), right=np.eye(4),
+            right_trigger=trigger, right_grip=grip, buttons={"X": True},
+        )  # fmt: skip
+        q = shaper(sample, 0.02)
+        assert np.allclose(q["right"], hands.pose(name, "right")), name
+        assert np.allclose(q["left"], hands.pose("open", "left"))  # X held: open hand
+        assert np.allclose(
+            shaper(sample, 0.02, engaged=False)["right"], hands.pose("hold", "right")
+        )
+    # filtered: a button press moves the fingers gradually
+    shaper = hands.HandShaper(tau=0.1)
+    fist = QuestSample(
+        t=0.0, head=np.eye(4), left=np.eye(4), right=np.eye(4), right_trigger=1, right_grip=1
+    )
+    first = shaper(fist, 0.02)["right"]
+    hold, goal = hands.pose("hold", "right"), hands.pose("fist", "right")
+    assert 0.1 < np.linalg.norm(first - hold) / np.linalg.norm(goal - hold) < 0.3
+    # DDS motor order and the RIS mode byte (xr_teleoperate robot_hand_unitree.py)
+    q = np.arange(7.0)
+    assert list(hands.to_motor_order(q, "left")) == list(q)
+    assert list(hands.to_motor_order(q, "right")) == [0, 1, 2, 5, 6, 3, 4]
+    assert hands.ris_mode(3) == 0x13 and hands.ris_mode(6, timeout=1) == 0x96
+
+
+def test_hand_poses_within_the_dex3_limits():
+    hands = pytest.importorskip("hands")
+    import xml.etree.ElementTree as ET
+
+    src = REPO / "third_party_assets/unitree_ros/robots/dexterous_hand_description/dex3_1"
+    if not src.exists():
+        pytest.skip("unitree_ros Dex3 description not checked out")
+    for side in ("left", "right"):
+        root = ET.parse(src / f"dex3_1_{side[0]}.urdf").getroot()
+        limits = {
+            j.get("name"): (
+                float(j.find("limit").get("lower")),
+                float(j.find("limit").get("upper")),
+            )
+            for j in root.iter("joint")
+            if j.get("type") == "revolute"
+        }
+        for name in ("hold", "open", "fist", "point", "pinch"):
+            for f, value in zip(hands.FINGERS, hands.pose(name, side)):
+                lo, hi = limits[f"{side}_hand_{f}_joint"]
+                assert lo - 1e-9 <= value <= hi + 1e-9, (side, name, f, value)
+
+
+def test_planner_hold_keeps_the_stance_until_the_sticks_move():
+    reference = pytest.importorskip("reference")
+    pl = reference.pl
+    try:
+        pl.find_planner_onnx()
+    except FileNotFoundError:
+        pytest.skip("planner ONNX not downloaded")
+    pytest.importorskip("onnxruntime")
+    ref = reference.PlannerReference(device="cpu", threads=2, hold=True)
+    try:
+        idle = pl.Command(mode=pl.IDLE, face_dir=np.array([1.0, 0.0, 0.0]))
+        terms = []
+        for _ in range(60):
+            ref.wait()
+            terms.append(ref.step(idle)["command_multi_future_lower_body"])
+        terms = np.array(terms)
+        assert np.ptp(terms, axis=0).max() == 0.0 and np.abs(terms[:, 120:]).max() == 0.0
+        walk = pl.Command(
+            mode=pl.SLOW_WALK, speed=0.4, move_dir=np.array([1.0, 0, 0]), face_dir=idle.face_dir
+        )
+        moved = []
+        for _ in range(60):
+            ref.wait()
+            moved.append(ref.step(walk)["command_multi_future_lower_body"])
+        assert np.abs(moved[-1][:120] - terms[-1][:120]).max() > 0.05  # the legs step
+    finally:
+        ref.close()

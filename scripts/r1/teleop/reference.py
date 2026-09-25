@@ -76,10 +76,20 @@ class StickState:
 
 
 class PlannerReference:
-    def __init__(self, planner_onnx: str | None = None, device: str = "cpu", threads: int = 4):
+    """``hold``: stand in the default pose until the sticks first move (``PlannerLoop.hold``)."""
+
+    def __init__(
+        self,
+        planner_onnx: str | None = None,
+        device: str = "cpu",
+        threads: int = 4,
+        hold: bool = True,
+    ):
         onnx = planner_onnx or str(pl.find_planner_onnx())
         self.model = pl.PlannerModel(onnx, threads=threads, device=device)
         self.loop = pl.AsyncPlannerLoop(self.model)
+        if hold:
+            self.loop.hold()
         self.legs = LegMap()
         self.delta = np.array([1.0, 0.0, 0.0, 0.0])
 

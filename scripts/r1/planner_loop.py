@@ -166,11 +166,22 @@ class PlannerLoop:
         context[:, 3] = 1.0
         context[:, 7:] = joints
         self.last = Command()
+        self.context_frame = context[-1].copy()
         self.motion = resample_30_to_50(self.model(context, self.last))
         self.cur = 0
         self.ticks = 0
         self.since_replan = 0.0
         self.num_replans = 1
+
+    def hold(self) -> None:
+        """Stand still in the initial context frame until a command replans.
+
+        The first IDLE plan from the default pose settles into the planner's own stance: the
+        feet move up to ~10 cm over 2 s and one lifts ~3 cm. A robot that stood up into the
+        default pose would shuffle when control engages. Static modes do not replan, so the
+        hold lasts until the sticks move, and that plan starts from the held frame.
+        """
+        self.motion, self.cur = self.context_frame[None].copy(), 0
 
     def _needs_replan(self, cmd: Command) -> bool:
         last = self.last

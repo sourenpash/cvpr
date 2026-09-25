@@ -56,6 +56,42 @@ In the viewer:
 - red spheres are the VR targets (palms, head);
 - blue spheres are the robot's palms.
 
+**Without a Quest: drive it from the keyboard.** `--input keys` replaces the headset with a
+virtual operator whose sticks and hands follow keys typed in the terminal (click the terminal,
+watch the viewer):
+
+```bash
+$PY scripts/r1/teleop/run.py --onnx $M.onnx --input keys --viewer --seconds 3600 \
+    --planner-device cuda:0 --policy-device cuda:0
+```
+
+| Keys | Action |
+|---|---|
+| w / s | faster forward / backward (4 presses to full speed) |
+| a / d | sidestep left / right |
+| q / e | turn left / right |
+| space | stop (the robot stands; it keeps its facing) |
+| 1 2 3 4 5 | hands: rest, wave (right), point (right), both hands up, reach forward |
+| g / t / o | fingers: point / fist / open (logged; the MuJoCo fingers are fixed) |
+
+**Calm motion (defaults, D18).** Every run applies these limits; `0` turns one off:
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--max-speed` | 0.5 m/s | top walking speed at full stick (SONIC's gamepad: 0.8) |
+| `--max-yaw-rate` | 0.6 rad/s | turning rate at full stick (gamepad: 1.0) |
+| `--smooth-tau` | 0.04 s | critically damped filter on the arm/waist targets (joint space) |
+| `--max-arm-speed` | 3 rad/s | speed limit on each arm target joint |
+| `--max-waist-speed` | 1 rad/s | speed limit on the waist targets |
+| `--no-planner-hold` | off | by default the legs hold the stand-up pose until the sticks first move |
+
+Without the hold, the planner's first idle plan moves the feet up to 10 cm over 2 s, lifting one
+foot 3 cm, before the operator has done anything.
+
+`sim_gate.py` also reports balance steps: `unplanned_steps` counts robot foot lifts of 0.1 s or
+more while the reference foot has stood for 0.3 s. `idle_foot_drift_mm` is how far a foot moves
+while the reference stands completely still.
+
 ## 4. The Quest
 
 1. Certificate, created once. It is already in `~/.config/xr_teleoperate/` on `asblab`:
@@ -70,9 +106,21 @@ In the viewer:
 
    | Thumbstick | Action |
    |---|---|
-   | Left | walk in the pushed direction, relative to the robot's facing; speed grows with deflection (0.2–0.8 m/s) |
-   | Right, sideways | turn the robot |
+   | Left | walk in the pushed direction, relative to the robot's facing; speed grows with deflection (0.2–0.5 m/s, `--max-speed`) |
+   | Right, sideways | turn the robot (up to 0.6 rad/s, `--max-yaw-rate`) |
    | Released | the robot stands |
+
+   The left stick is a velocity command: SONIC's kinematic planner turns it into leg motion.
+
+   | Fingers (Dex3, each hand) | Pose |
+   |---|---|
+   | nothing pressed | semi-closed (the hold pose the policy was trained with) |
+   | grip | point: index out, middle finger and thumb closed |
+   | grip + trigger | fist |
+   | trigger | pinch |
+   | A (right) / X (left), after engaging | open flat hand |
+
+   Poses blend with the analog trigger and grip, filtered over 0.1 s (`hands.py`).
 
 5. **Calibration pose** (the R1's default pose): stand upright, upper arms along the body, forearms angled forward-down about 50°, controllers level. Face the same direction the whole session and turn the robot with the right stick. The hand frame is fixed at calibration, so looking around does not move the hands.
 6. **Head:** your head yaw and roll (clamped to ±0.6 / ±0.25 rad) turn and tilt the robot's torso through the waist. The R1 has no waist pitch.
@@ -134,6 +182,15 @@ In the viewer:
 
    Each stage takes 3 × 1 min without a trip before the next.
 
+**Dex3 hands.**
+- The DDS process publishes `rt/dex3/{left,right}/cmd` at 100 Hz from stand-up on: the hold pose,
+  then the operator's finger poses once engaged. Parameters are xr_teleoperate's: kp 1.5, kd 0.2,
+  RIS mode byte.
+- In damping the fingers go limp (kp 0).
+- VERIFY at bring-up, hanging, before stand-up:
+  - each hand's motor order: left thumb 0–2, middle 0–1, index 0–1; right thumb 0–2, index 0–1, middle 0–1;
+  - that closing is negative on the left and positive on the right;
+  - the look of each pose.
+
 Not done yet:
-- A Dex3 hold pose on `rt/dex3/*`. The hands are on their own DDS channel and are not commanded here.
 - Driving the head motors from the headset. They are held at 0.

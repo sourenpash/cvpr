@@ -7,11 +7,17 @@
 #    0.5 (the noise alone costs ~13 % of the tracking reward through the action-rate penalty).
 #    Here entropy 0 and a 0.25 cap (PHC / AMP use a fixed small std and no entropy bonus).
 #  * L2C2 temporal smoothness loss on the action mean (AGILE 2603.20147, HoST 2502.08378):
-#    trainer TRLSmoothPPOTrainer, coefficient 1.0 on half of each micro-batch's environments.
-#  * Rewards (mdp/smoothness.py): action second difference; action rate per joint with the
-#    G1-scale correction (softened: hips/knees x3, hip yaw and waist x4, ankles x1.5, arms x1.2);
+#    trainer TRLSmoothPPOTrainer, on half of each micro-batch's environments, interpolating the
+#    proprioception only (``l2c2_keys``), coefficient 0.5.
+#  * Rewards (mdp/smoothness.py): action second difference; action rate per joint with part of
+#    the G1-scale correction (hips/knees x1.5, hip yaw and waist x2, arms x1.2);
 #    anti-shake on wrist/torso angular velocity relative to the reference (deadzone 0.5 rad/s)
 #    instead of SONIC's absolute 1.5 rad/s; wrist linear-velocity tracking for crisp gestures.
+#
+# Stage B2 (W&B s1lcudzk) ran L2C2 at 1.0 on every observation, the tokenizer included, with
+# hips/knees x3, hip yaw and waist x4, ankles x1.5. Smoother, but uniform success fell from 0.845
+# to 0.706 in 1000 iterations (walking clips 0.75 -> 0.47): L2C2 on the tokenizer makes the FSQ
+# encoder resist reference changes, and the leg multipliers slow the legs (PLAN.md Q6).
 #
 # Data: ++manager_env.commands.motion.motion_lib_cfg.motion_file=data/motion_lib_r1/B2
 # Warm start: checkpoint=<a sonic_r1_dex3_teleop_robust checkpoint>
@@ -26,8 +32,9 @@ algo:
   config:
     entropy_coef: 0.0
     std_clamp_max: 0.25
-    l2c2_policy_coef: 1.0
+    l2c2_policy_coef: 0.5
     l2c2_fraction: 0.5
+    l2c2_keys: ["actor_obs"] # proprioception; the tokenizer (reference) stays at x_t
 
 manager_env:
   rewards:
@@ -40,11 +47,10 @@ manager_env:
       weight: -0.1
       params:
         multipliers:
-          ".*_hip_(pitch|roll)_joint": 3.0
-          ".*_knee_joint": 3.0
-          ".*_hip_yaw_joint": 4.0
-          "waist_.*_joint": 4.0
-          ".*_ankle_.*_joint": 1.5
+          ".*_hip_(pitch|roll)_joint": 1.5
+          ".*_knee_joint": 1.5
+          ".*_hip_yaw_joint": 2.0
+          "waist_.*_joint": 2.0
           ".*_(shoulder_.*|elbow|wrist_roll)_joint": 1.2
     action_acc_l2:
       _target_: isaaclab.managers.RewardTermCfg

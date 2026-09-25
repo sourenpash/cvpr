@@ -96,6 +96,28 @@ G1_ONLY_JOINTS = (
 DEX3_MOUNT_XYZ = (0.080, 0.0, 0.0)
 DEX3_MOUNT_RPY = (0.0, 0.0, 0.0)  # VERIFY: hand roll about the forearm axis may differ from G1
 
+# Dex3-1 finger pose the policy's hand is built with (the fingers are fixed in the model) and the
+# real hands hold while the arm moves: a relaxed, semi-closed fist (user request 2026-09-25).
+# About half of each finger's closing range and a lightly curled thumb, from the unitree_ros
+# dex3_1_{l,r}.urdf limits: left fingers close towards negative angles, right towards positive
+# (thumb_1/thumb_2 mirrored). VERIFY the look on the real hands.
+DEX3_HOLD_POSE = {
+    "left_hand_thumb_0_joint": 0.0,
+    "left_hand_thumb_1_joint": 0.3,
+    "left_hand_thumb_2_joint": 0.7,
+    "left_hand_middle_0_joint": -0.8,
+    "left_hand_middle_1_joint": -0.9,
+    "left_hand_index_0_joint": -0.8,
+    "left_hand_index_1_joint": -0.9,
+    "right_hand_thumb_0_joint": 0.0,
+    "right_hand_thumb_1_joint": -0.3,
+    "right_hand_thumb_2_joint": -0.7,
+    "right_hand_middle_0_joint": 0.8,
+    "right_hand_middle_1_joint": 0.9,
+    "right_hand_index_0_joint": 0.8,
+    "right_hand_index_1_joint": 0.9,
+}
+
 # Hand "grasp point" used for vr_3point / reward_point tracking, in the wrist_roll_link frame.
 # Mirrors SONIC's G1 convention (wrist_yaw_link + [0.18, -/+0.025, 0]) where the palm base
 # sits at x=0.0415: i.e. 0.1385 m beyond the palm base, 0.025 m lateral (thumb side).

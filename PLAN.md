@@ -190,9 +190,12 @@ Task IDs (M = Mac-side, G = GPU-box) are referenced from §5.
   - `safety.py` watchdog. `run.py` phases: damping → stand-up 3 s → hold → A + X → shadow → blend 2 s → run.
   - `dds_sim.py`: MuJoCo behind the same DDS topics, with a gantry band. On loopback, discovery uses a unicast peer.
   - **DDS closed loop:** 45 s of stand-up, shadow, blend, walking + reaching, gantry released at 9 s. No trips; tick period p50 20.0 ms, p95 21.0 ms, max 23.2 ms; max tilt 12°.
-  - Open: the hardware checks (`robot_unitree.py --check`), a Dex3 hold pose.
+  - **Dex3 hands** (`hands.py`, D18): the DDS process publishes `rt/dex3/{left,right}/cmd` at 100 Hz from stand-up on (xr_teleoperate's kp 1.5, kd 0.2, RIS mode byte); the fingers go limp in damping.
+    - Default: the semi-closed hold pose the model is built with.
+    - Controller: grip = point, grip + trigger = fist, trigger = pinch, A / X = open hand.
+  - Open: the hardware checks (`robot_unitree.py --check`); the Dex3 motor order and signs (VERIFY).
 - [ ] **Q5** Real-robot bring-up and demo takes.
-- [~] **Q6 Smoothness and gestures, stage B2** (D17). Preset `sonic_r1_dex3_teleop_smooth.yaml`, run `sonic_r1_dex3_teleop_smooth_stage_b2`, launched 2026-09-25 14:02 from B+ iteration 5000 (`r1_init/teleop_bplus_it5000.pt`). Log `logs_rl/console/teleop_stage_b2.log`.
+- [x] **Q6 Smoothness and gestures, stage B2** (D17; stopped 2026-09-25 17:30 at iteration ~1030, superseded by B3). Preset `sonic_r1_dex3_teleop_smooth.yaml`, run `sonic_r1_dex3_teleop_smooth_stage_b2`, launched 2026-09-25 14:02 from B+ iteration 5000 (`r1_init/teleop_bplus_it5000.pt`). Log `logs_rl/console/teleop_stage_b2.log`.
   - **Why.** B+ jitters in MuJoCo (`scripts/r1/teleop/sim_gate.py`, 60 s walk + wave, #51 actuators):
     - joint-velocity content above 5 Hz: arms 0.18 rad/s RMS, 14 % of their motion power (their IK targets: 0.5 %); legs 0.35 rad/s, 14 % (the planner's own legs: about 0.2 rad/s);
     - standing still is steady (0.005 rad/s).
@@ -211,6 +214,36 @@ Task IDs (M = Mac-side, G = GPU-box) are referenced from §5.
     - **K1_ok:** 214 Kimodo-G1 clips (`generate_kimodo_motions.py`, `kimodo_quality.py`); 289 transferred, 336 generated.
   - **Kimodo fix.** Its text encoder returned all-zero embeddings under torch 2.6/2.7 on this machine, so every prompt gave the same motion. Embeddings now come from `kimodo_text_embeddings.py` in the `llm2vec` env (torch 2.8).
   - **Rendering.** `video_eval` renders the deterministic policy during every periodic evaluation.
+  - **Iteration 500 in MuJoCo** (`sim_gate.py`, `logs_rl/sim2sim/gate_b2_it500.json`) vs B+ iteration 4500:
+    - smoother: arms above 5 Hz 0.131 vs 0.177 rad/s RMS, legs 0.290 vs 0.355;
+    - worse tracking: clip success 0.73 vs 0.85 (planner 0.58 vs 0.76, mocap 0.88 vs 0.94), mostly foot-position failures on planner clips;
+    - leg MPJPE +2 mm and VR 3-point error +6–8 mm on clips both pass.
+  - **Iteration 1000, Isaac uniform eval: 0.706** vs 0.845 at iteration 1 (planner 0.47 vs 0.75, mocap 0.76 vs 0.86, Kimodo 0.93 vs 0.98). MuJoCo 0.76 (planner 0.66, mocap 0.86).
+  - **Diagnosis.**
+    - L2C2 interpolated every observation, the tokenizer included. It asked the FSQ encoder to change its token less as the reference moves, and its loss fell 4× (0.034 → 0.008) while every group lost tracking, walking clips most.
+    - The 3–4× leg action-rate multipliers also slow the legs.
+    - The jitter itself is the policy's: frictionless actuators jitter more in MuJoCo, not less.
+- [~] **Q7 Calm motion and semi-closed hands, stage B3** (D18; user request 2026-09-25: no balance steps, a little slower, predictable, as little unnecessary motion as possible).
+  - **Hands.** `r1_spec.DEX3_HOLD_POSE` is a relaxed semi-closed fist. `build_r1_assets.py` bakes it into the fixed finger joints of the URDF and MJCF (rendered and checked), and the real hands hold the same pose (Q4).
+  - **Rewards** (`sonic_r1_dex3_teleop_calm.yaml` = the smooth preset plus two terms in `mdp/smoothness.py`):
+    - `stance_foot_motion` −2: |v_foot − v_foot_ref|² while the reference foot stands (ankle link < 9 cm, slower than 0.15 m/s: 73 % of eval-clip foot frames). This targets balance steps, shuffles and slides.
+    - `leg_joint_vel_error` −0.003: Σ (dq − dq_ref)² over the legs.
+  - **Runtime** (`run.py` defaults, all switchable):
+    - walking ≤ 0.5 m/s, turning ≤ 0.6 rad/s;
+    - a critically damped joint-space filter on the arm/waist targets (τ 0.04 s; arms ≤ 3 rad/s, waist ≤ 1 rad/s);
+    - the planner holds the stand-up stance until the sticks first move. Its first idle plan had moved the feet 10 cm, lifting one 3 cm, before the operator did anything.
+  - **Driving without a Quest:** `run.py --input keys` (WASD walk, Q/E turn, 1–5 gestures).
+  - **Gate metrics** in `sim_gate.py`: `unplanned_steps` (robot foot lifts ≥ 0.1 s while the reference foot has stood ≥ 0.3 s) and `idle_foot_drift_mm`.
+  - **MuJoCo friction.** `robot_mujoco.build_model` now uses elliptic cones with impratio 10.
+    - MuJoCo's default soft friction let a standing policy's feet creep apart: 56 mm in 20 s, at ~3 mm/s with the soles flat.
+    - With impratio 10 the creep is 3.7 mm (0.9 mm at impratio 100); walking results are unchanged.
+    - PhysX and rubber soles hold, so gates before 2026-09-25 17:40 ran on the soft contacts.
+  - **Run B3** `sonic_r1_dex3_teleop_calm_stage_b3-20260925_173149`, W&B `4uxqa4go`, log `logs_rl/console/teleop_stage_b3.log`.
+    - Launched 17:31 from B+ iteration 5000 on B2's data.
+    - Smooth preset corrected: L2C2 0.5 on `actor_obs` only (`l2c2_keys`); leg multipliers 1.5–2.
+    - Calm terms and semi-closed hands as above.
+    - Evals at iterations 500 and 1000, then every 1000.
+    - Iteration 10: stance_foot_motion −0.17 per second, leg_joint_vel_error −0.02, against +2.3 of tracking reward; 10.8 s per iteration.
 
 ---
 
@@ -571,7 +604,17 @@ caveat (position tracked strongly; orientation reduced to palm-normal).
     - adds reward-side penalties that spare 1–3 Hz gestures: a second difference, and a per-joint action rate corrected for our G1 action scale;
     - makes anti-shake relative to the reference.
   - Gates: arm high-frequency share ≤ 2 % in `sim_gate.py`; success within a point of B+.
+  - **Amended after B2:** with SONIC's token model, L2C2 interpolates the proprioception only. On the tokenizer it makes the encoder ignore reference changes; B2 lost 14 points of success in 1000 iterations.
   - Gesture data: real mocap first (S2), with Kimodo filling specific gestures (≤ 10 % of the mix).
+- **D18 Calm is split between the reward and the runtime** (2026-09-25).
+  - The policy follows its reference, so "slower" belongs in the reference: lower stick limits and a joint-space target filter in `run.py`. A reward cannot slow the robot down without also hurting tracking.
+  - "No unnecessary motion" belongs in the reward, measured against the reference:
+    - robot foot velocity while the reference foot stands (feet-slip / contact-mismatch terms of legged_gym, ASAP 2502.01143, PBHC 2506.12851);
+    - leg joint-velocity error.
+
+    Both are zero when tracking is perfect, so they do not fight the tracking terms, unlike a plain feet-slip or joint-velocity penalty.
+  - The planner's own idle settling step is removed at the source: `PlannerLoop.hold`.
+  - The fingers are not part of the policy. The model is built with the fingers welded in the hold pose, and a separate grasp synergy drives the real hands (`hands.py`). Hand-tracking retargeting and learned finger control come after the talk.
 
 ## 7. Risks
 

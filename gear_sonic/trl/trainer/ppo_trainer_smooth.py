@@ -12,8 +12,15 @@ micro-batches of this trainer hold whole rollouts of the selected environments (
 so the consecutive observations are already there; ``l2c2_fraction`` of the environments per
 micro-batch get the extra actor forward pass (cost: that fraction of one actor forward/backward).
 
-Config (``algo.config``): ``l2c2_policy_coef`` (0 = off), ``l2c2_fraction`` (default 0.5).
-Logged as ``loss/l2c2_avg``.
+Config (``algo.config``): ``l2c2_policy_coef`` (0 = off), ``l2c2_fraction`` (default 0.5),
+``l2c2_keys`` (observation keys to interpolate; the others stay at x_t; default: all). Logged
+as ``loss/l2c2_avg``.
+
+With SONIC's token model, interpolate only the proprioception (``["actor_obs"]``). Stage B2
+interpolated the tokenizer observations too, which asks the FSQ encoder to change its token
+less as the reference moves. Its uniform success fell from 0.845 to 0.706 in 1000 iterations,
+walking clips from 0.75 to 0.47 (PLAN.md Q6). The jitter is in the feedback from the robot's
+state, which the proprioception carries.
 """
 
 from __future__ import annotations
@@ -30,6 +37,8 @@ class TRLSmoothPPOTrainer(TRLAuxLossPPOTrainer):
         super()._init_config()
         self.l2c2_coef = float(self.config.get("l2c2_policy_coef", 0.0))
         self.l2c2_fraction = float(self.config.get("l2c2_fraction", 0.5))
+        keys = self.config.get("l2c2_keys", None)
+        self.l2c2_keys = None if keys is None else set(keys)
 
     def _register_stats_buffer(self):
         super()._register_stats_buffer()
@@ -52,7 +61,7 @@ class TRLSmoothPPOTrainer(TRLAuxLossPPOTrainer):
         interp = {}
         for key, value in obs.items():
             x0, x1 = value[idx, :-1], value[idx, 1:]
-            if value.is_floating_point():
+            if value.is_floating_point() and (self.l2c2_keys is None or key in self.l2c2_keys):
                 w = u.view(n, num_steps - 1, *([1] * (value.dim() - 2)))
                 interp[key] = x0 + w * (x1 - x0)
             else:

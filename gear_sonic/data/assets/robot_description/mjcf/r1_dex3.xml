@@ -205,19 +205,19 @@
                   <geom class="visual" rgba="0.79216 0.81961 0.93333 1" mesh="left_elbow_link"/>
                   <geom name="left_elbow_collision" class="collision" size="0.03" fromto="0.015 -0.025 -0.01 0.085 -0.025 -0.01"/>
                   <body name="left_wrist_roll_link" pos="0.11218 -0.03002 -0.011702">
-                    <inertial pos="0.12166358 -0.0060129302 0.00032982196" quat="0.99950803 -0.0063315768 0.0023694591 0.030626852" mass="1.021313" diaginertia="0.00091858955 0.003674571 0.0037067386"/>
+                    <inertial pos="0.12015841 -0.011065198 0.00032982196" quat="0.99726389 -0.022711144 0.004697227 -0.070191752" mass="1.021313" diaginertia="0.00095038721 0.0032207106 0.0032849692"/>
                     <joint name="left_wrist_roll_joint" pos="0 0 0" axis="1 0 0" range="-1.9199 1.9199"/>
                     <geom class="visual" rgba="0.79216 0.81961 0.93333 1" mesh="left_wrist_roll_link"/>
                     <geom name="left_hand_collision" class="collision" size="0.035" rgba="0.2 0.6 0.2 0.2" fromto="0.05 0 0 0.24 0 0"/>
                     <site name="left_palm" pos="0.14 0 0" size="0.01"/>
                     <geom class="visual" pos="0.08 0 0" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="left_hand_palm_link"/>
-                    <geom class="visual" pos="0.1577 0.0016 0.0285" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="left_hand_index_0_link"/>
-                    <geom class="visual" pos="0.2035 0.0016 0.0285" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="left_hand_index_1_link"/>
-                    <geom class="visual" pos="0.1577 0.0016 -0.0285" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="left_hand_middle_0_link"/>
-                    <geom class="visual" pos="0.2035 0.0016 -0.0285" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="left_hand_middle_1_link"/>
+                    <geom class="visual" pos="0.1577 0.0016 0.0285" quat="0.921061 0 0 -0.389418" rgba="0.3 0.3 0.3 1" mesh="left_hand_index_0_link"/>
+                    <geom class="visual" pos="0.189609 -0.0312549 0.0285" quat="-0.659983 0 0 0.75128" rgba="0.3 0.3 0.3 1" mesh="left_hand_index_1_link"/>
+                    <geom class="visual" pos="0.1577 0.0016 -0.0285" quat="0.921061 0 0 -0.389418" rgba="0.3 0.3 0.3 1" mesh="left_hand_middle_0_link"/>
+                    <geom class="visual" pos="0.189609 -0.0312549 -0.0285" quat="-0.659983 0 0 0.75128" rgba="0.3 0.3 0.3 1" mesh="left_hand_middle_1_link"/>
                     <geom class="visual" pos="0.1055 0 0" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="left_hand_thumb_0_link"/>
-                    <geom class="visual" pos="0.103 -0.0193 0" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="left_hand_thumb_1_link"/>
-                    <geom class="visual" pos="0.103 -0.0651 0" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="left_hand_thumb_2_link"/>
+                    <geom class="visual" pos="0.103 -0.0193 0" quat="0.988771 0 0 0.149438" rgba="0.3 0.3 0.3 1" mesh="left_hand_thumb_1_link"/>
+                    <geom class="visual" pos="0.116535 -0.0630544 0" quat="0.877583 0 0 0.479426" rgba="0.3 0.3 0.3 1" mesh="left_hand_thumb_2_link"/>
                   </body>
                 </body>
               </body>
@@ -242,19 +242,19 @@
                   <geom class="visual" rgba="0.79216 0.81961 0.93333 1" mesh="right_elbow_link"/>
                   <geom name="right_elbow_collision" class="collision" size="0.03" fromto="0.015 0.025 -0.01 0.085 0.025 -0.01"/>
                   <body name="right_wrist_roll_link" pos="0.11218 0.03002 -0.011702">
-                    <inertial pos="0.12166358 0.0060129302 0.00032982196" quat="0.99950803 0.0063315768 0.0023694591 -0.030626852" mass="1.021313" diaginertia="0.00091858955 0.003674571 0.0037067386"/>
+                    <inertial pos="0.12015841 0.011065198 0.00032982196" quat="0.99726389 0.022711144 0.004697227 0.070191752" mass="1.021313" diaginertia="0.00095038721 0.0032207106 0.0032849692"/>
                     <joint name="right_wrist_roll_joint" pos="0 0 0" axis="1 0 0" range="-1.9199 1.9199"/>
                     <geom class="visual" rgba="0.79216 0.81961 0.93333 1" mesh="right_wrist_roll_link"/>
                     <geom name="right_hand_collision" class="collision" size="0.035" rgba="0.2 0.6 0.2 0.2" fromto="0.05 0 0 0.24 0 0"/>
                     <site name="right_palm" pos="0.14 0 0" size="0.01"/>
                     <geom class="visual" pos="0.08 0 0" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="right_hand_palm_link"/>
-                    <geom class="visual" pos="0.1577 -0.0016 0.0285" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="right_hand_index_0_link"/>
-                    <geom class="visual" pos="0.2035 -0.0016 0.0285" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="right_hand_index_1_link"/>
-                    <geom class="visual" pos="0.1577 -0.0016 -0.0285" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="right_hand_middle_0_link"/>
-                    <geom class="visual" pos="0.2035 -0.0016 -0.0285" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="right_hand_middle_1_link"/>
+                    <geom class="visual" pos="0.1577 -0.0016 0.0285" quat="0.921061 0 0 0.389418" rgba="0.3 0.3 0.3 1" mesh="right_hand_index_0_link"/>
+                    <geom class="visual" pos="0.189609 0.0312549 0.0285" quat="0.659983 0 0 0.75128" rgba="0.3 0.3 0.3 1" mesh="right_hand_index_1_link"/>
+                    <geom class="visual" pos="0.1577 -0.0016 -0.0285" quat="0.921061 0 0 0.389418" rgba="0.3 0.3 0.3 1" mesh="right_hand_middle_0_link"/>
+                    <geom class="visual" pos="0.189609 0.0312549 -0.0285" quat="0.659983 0 0 0.75128" rgba="0.3 0.3 0.3 1" mesh="right_hand_middle_1_link"/>
                     <geom class="visual" pos="0.1055 0 0" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="right_hand_thumb_0_link"/>
-                    <geom class="visual" pos="0.103 0.0193 0" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="right_hand_thumb_1_link"/>
-                    <geom class="visual" pos="0.103 0.0651 0" quat="1 0 0 0" rgba="0.3 0.3 0.3 1" mesh="right_hand_thumb_2_link"/>
+                    <geom class="visual" pos="0.103 0.0193 0" quat="0.988771 0 0 -0.149438" rgba="0.3 0.3 0.3 1" mesh="right_hand_thumb_1_link"/>
+                    <geom class="visual" pos="0.116535 0.0630544 0" quat="0.877583 0 0 -0.479426" rgba="0.3 0.3 0.3 1" mesh="right_hand_thumb_2_link"/>
                   </body>
                 </body>
               </body>

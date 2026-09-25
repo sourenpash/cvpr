@@ -15,9 +15,10 @@ Deterministic transformation (re-runnable; outputs are committed):
   gear_sonic/data/assets/robot_description/urdf/r1/R1_DEX3_DERIVED.json (measured constants)
 
 URDF changes: rename pelvis_link->pelvis and waist_yaw_link->torso_link; head joints fixed;
-Dex3-1 hands attached as fixed subtrees on the wrist roll links (fingers fixed at the open
-pose); wrist collision mesh (which contains the stock fist) replaced by a forearm cylinder;
-wrist visual mesh cut at the Dex3 mount (``*_wrist_roll_link_forearm.STL``, fist removed).
+Dex3-1 hands attached as fixed subtrees on the wrist roll links (fingers fixed at
+``r1_spec.DEX3_HOLD_POSE``, a semi-closed fist); wrist collision mesh (which contains the stock
+fist) replaced by a forearm cylinder; wrist visual mesh cut at the Dex3 mount
+(``*_wrist_roll_link_forearm.STL``, fist removed).
 MJCF changes: meshdir; Dex3 mass fused into the wrist bodies (parallel-axis); forearm visual
 mesh; hand collision/palm site extended; dangling <exclude> entries removed; <actuator> block
 added (required by SONIC's Humanoid_Batch).
@@ -153,7 +154,18 @@ def _rename_links(root: ET.Element, renames: dict[str, str]) -> None:
                 el.set("link", renames[el.get("link")])
 
 
-def _make_fixed(joint: ET.Element) -> None:
+def _make_fixed(joint: ET.Element, angle: float = 0.0) -> None:
+    """Turn a revolute joint into a fixed one at ``angle`` (rad): baked into the origin rpy."""
+    if angle != 0.0:
+        from scipy.spatial.transform import Rotation as R
+
+        o = joint.find("origin")
+        if o is None:
+            o = ET.SubElement(joint, "origin", xyz="0 0 0", rpy="0 0 0")
+        axis = np.array([float(v) for v in joint.find("axis").get("xyz").split()])
+        rpy = [float(v) for v in o.get("rpy", "0 0 0").split()]
+        rot = rpy_to_matrix(rpy) @ R.from_rotvec(angle * axis / np.linalg.norm(axis)).as_matrix()
+        o.set("rpy", _fmt(R.from_matrix(rot).as_euler("xyz")))  # URDF rpy = extrinsic x-y-z
     joint.set("type", "fixed")
     for tag in ("axis", "limit", "dynamics", "safety_controller", "calibration", "mimic"):
         for el in joint.findall(tag):
@@ -161,7 +173,7 @@ def _make_fixed(joint: ET.Element) -> None:
 
 
 def _load_dex3(side: str) -> tuple[list[ET.Element], list[ET.Element]]:
-    """Return (links, joints) of one Dex3-1 URDF with the floating base removed and joints fixed."""
+    """(links, joints) of one Dex3-1 URDF: floating base removed, fingers fixed at DEX3_HOLD_POSE."""
     root = ET.parse(SRC_DEX3_DIR / f"dex3_1_{side}.urdf").getroot()
     links = [copy.deepcopy(el) for el in root.findall("link") if el.get("name") != "world"]
     joints = []
@@ -169,7 +181,7 @@ def _load_dex3(side: str) -> tuple[list[ET.Element], list[ET.Element]]:
         if j.get("type") == "floating" or j.find("parent").get("link") == "world":
             continue
         j = copy.deepcopy(j)
-        _make_fixed(j)
+        _make_fixed(j, spec.DEX3_HOLD_POSE.get(j.get("name"), 0.0))
         joints.append(j)
     return links, joints
 
@@ -222,7 +234,8 @@ def build_urdf() -> ET.Element:
         ET.SubElement(mount, "child", link=palm)
         root.append(
             ET.Comment(
-                f" Dex3-1 {side.upper()} hand (unitree_ros dex3_1_{side}.urdf), fixed at the open pose "
+                f" Dex3-1 {side.upper()} hand (unitree_ros dex3_1_{side}.urdf), fingers fixed at "
+                f"r1_spec.DEX3_HOLD_POSE (semi-closed) "
             )
         )
         root.append(mount)

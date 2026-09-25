@@ -4,12 +4,19 @@
 At 50 Hz:
 
 1. input: headset + controller poses, thumbsticks, buttons (``quest.py``, or ``ScriptedOperator``
-   for unattended sim tests, or a recorded session);
-2. lower body: the left/right sticks drive SONIC's kinematic planner (``reference.py``);
-3. upper body: calibrated Quest poses -> IK-projected VR 3-point targets (``targets.py``);
+   for unattended sim tests, the terminal keyboard (``keyboard.py``), or a recorded session);
+2. lower body: the left/right sticks drive SONIC's kinematic planner (``reference.py``), a
+   velocity command (direction and speed relative to the robot's facing) plus a yaw rate;
+3. upper body: calibrated Quest poses -> IK-projected VR 3-point targets (``targets.py``),
+   smoothed and speed-limited in joint space;
 4. the observation, exactly as in training (``observations.py``), the ONNX policy
    (``policy.py``), joint targets ``default + scale * clip(a)``;
-5. the robot: MuJoCo (``robot_mujoco.py``) or the real R1 (``robot_unitree.py``).
+5. the robot: MuJoCo (``robot_mujoco.py``) or the real R1 (``robot_unitree.py``), with the
+   Dex3 fingers semi-closed or shaped by the controllers' grip and trigger (``hands.py``).
+
+Calm defaults (user request 2026-09-25): walking at up to 0.5 m/s and turning at 0.6 rad/s
+(SONIC's gamepad: 0.8 m/s, 1 rad/s), arm joints at up to 3 rad/s, and the planner holds the
+default stance until the sticks first move (its first plan would shuffle the feet otherwise).
 
 Operator protocol: stand in the robot's default pose (upper arms down, forearms forward-down),
 press A + X to calibrate and engage; targets ramp in over 1 s; B + Y disengages (damping on the
@@ -31,9 +38,10 @@ import time
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from hands import HandShaper  # noqa: E402
 import observations as ob  # noqa: E402
 from policy import TeleopPolicy  # noqa: E402
-from quest import QuestSample  # noqa: E402
+from quest import FACING_X, QuestSample, device_pose  # noqa: E402
 import reference as rf  # noqa: E402
 import rotations as rot  # noqa: E402
 import targets as tg  # noqa: E402
@@ -44,15 +52,6 @@ RAMP_S = 1.0
 # ------------------------------------------------------------------------------------------
 # A scripted operator (a virtual Quest), for closed-loop tests without a headset
 # ------------------------------------------------------------------------------------------
-def _pose(pos, R=None) -> np.ndarray:
-    m = np.eye(4)
-    m[:3, :3] = np.eye(3) if R is None else R
-    m[:3, 3] = pos
-    return m
-
-
-# WebXR device axes in robot-convention world coordinates for a device facing +x (forward = -z)
-FACING_X = np.array([[0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
 
 
 @dataclass
@@ -115,10 +114,10 @@ class ScriptedOperator:
         hands = self.hands(t)
         ls, rs = self.sticks(t)
         yaw = 0.15 * np.sin(2 * np.pi * t / 8.0) if self.program in ("walk_reach", "demo") else 0.0
-        head = _pose(self.head0, tg.yaw_matrix(yaw) @ FACING_X)
+        head = device_pose(self.head0, tg.yaw_matrix(yaw) @ FACING_X)
         return QuestSample(
-            t=time.monotonic(), head=head, left=_pose(hands["left"], FACING_X),
-            right=_pose(hands["right"], FACING_X), left_stick=ls, right_stick=rs,
+            t=time.monotonic(), head=head, left=device_pose(hands["left"], FACING_X),
+            right=device_pose(hands["right"], FACING_X), left_stick=ls, right_stick=rs,
             buttons={"A": press, "X": press},
         )  # fmt: skip
 
@@ -186,6 +185,9 @@ class MujocoRobot:
         if self.viewer is not None:
             self.viewer.sync()
 
+    def hands(self, left: np.ndarray, right: np.ndarray) -> None:
+        pass  # the model's fingers are fixed in the hold pose
+
     def show_targets(self, vr_local: np.ndarray, offsets: np.ndarray) -> None:
         """Viewer markers: VR targets (red, placed at the robot's pelvis) and the palms (blue)."""
         if self.viewer is None:
@@ -244,6 +246,9 @@ class UnitreeRobot:
     def command(self, target: np.ndarray) -> None:
         self.r1.command(target)
 
+    def hands(self, left: np.ndarray, right: np.ndarray) -> None:
+        self.r1.hands(left, right)
+
     def damping(self) -> None:
         self.r1.damping()
 
@@ -268,6 +273,12 @@ class Runtime:
         planner_device: str = "cpu",
         scale: float = 0.65,
         sync_planner: bool = False,
+        max_speed: float = 0.5,
+        max_yaw_rate: float = 0.6,
+        smooth_tau: float = 0.04,
+        max_arm_speed: float = 3.0,
+        max_waist_speed: float = 1.0,
+        planner_hold: bool = True,
     ):
         self.policy, self.meta, self.robot = policy, policy.meta, robot
         self.builder = ob.ObservationBuilder(self.meta)
@@ -275,9 +286,16 @@ class Runtime:
         self.action_scale = np.asarray(self.meta["action_scale"])
         self.clip = float(self.meta["action_clip"])
         self.dt = float(self.meta["control_dt"])
-        self.reference = rf.PlannerReference(device=planner_device)
-        self.sticks = rf.StickState()
-        self.targets = tg.VRTargets(scale=scale)
+        self.reference = rf.PlannerReference(device=planner_device, hold=planner_hold)
+        lo = rf.StickState.speed_range[0]
+        self.sticks = rf.StickState(max_yaw_rate=max_yaw_rate, speed_range=(lo, max(lo, max_speed)))
+        self.targets = tg.VRTargets(
+            scale=scale,
+            smooth_tau=smooth_tau,
+            max_arm_speed=max_arm_speed,
+            max_waist_speed=max_waist_speed,
+        )
+        self.hands = HandShaper()
         self.default_vr = self.targets.terms(self.targets.ik.q0)
         self.sync_planner = sync_planner
         self.engaged = False
@@ -298,11 +316,12 @@ class Runtime:
         if self.sync_planner:
             self.reference.wait()
         ref = self.reference.step(cmd)
-        vr = self.targets.solve(sample.head, sample.left, sample.right)
+        vr = self.targets.solve(sample.head, sample.left, sample.right, dt=self.dt)
         alpha = float(np.clip((t - self.t_engage) / RAMP_S, 0.0, 1.0))
         if alpha < 1.0:  # ramp the targets in from the default pose (joint space of the IK)
-            q = (1 - alpha) * self.targets.ik.q0 + alpha * self.targets.ik.q
+            q = (1 - alpha) * self.targets.ik.q0 + alpha * vr["q"]
             vr = self.targets.terms(q)
+        fingers = self.hands(sample, self.dt)
         tok = {
             "motion_anchor_ori_heading": ob.anchor_ori_heading(state["quat"], ref["ref_root_quat"]),
             "command_multi_future_lower_body": ref["command_multi_future_lower_body"],
@@ -323,6 +342,7 @@ class Runtime:
             "left_stick": sample.left_stick, "right_stick": sample.right_stick,
             "cmd_mode": cmd.mode, "cmd_speed": cmd.speed, "cmd_move": cmd.move_dir, "cmd_face": cmd.face_dir,
             "ref_g1_qpos": ref["g1_qpos"], "obs": obs, "action": action, "q_ik": vr["q"],
+            "q_ik_raw": vr["q_ik"], "hand_left": fingers["left"], "hand_right": fingers["right"],
             "robot_q": state["q"], "robot_dq": state["dq"], "robot_quat": state["quat"], "robot_pos": state["pos"],
             "infer_ms": infer_ms, "planner_latency_ticks": self.reference.loop.last_latency_ticks,
             "target": target, "wall": time.perf_counter(),
@@ -355,7 +375,11 @@ def main() -> None:
     ap.add_argument("--robot", choices=["mujoco", "unitree"], default="mujoco")
     ap.add_argument("--interface", default="lo", help="unitree: network interface to the robot")
     ap.add_argument("--domain", type=int, default=1, help="unitree: DDS domain (robot: 0)")
-    ap.add_argument("--input", default="script:walk_reach", help="quest | script:<program>")
+    ap.add_argument(
+        "--input",
+        default="script:walk_reach",
+        help="quest | keys | script:<program> | replay:<npz>",
+    )
     ap.add_argument("--seconds", type=float, default=60.0)
     ap.add_argument("--profile", choices=["nominal", "issue51"], default="issue51")
     ap.add_argument("--delay-ms", type=float, default=10.0)
@@ -371,14 +395,26 @@ def main() -> None:
     )
     ap.add_argument("--viewer", action="store_true")
     ap.add_argument("--record", type=Path, default=None)
+    calm = ap.add_argument_group("calm motion (0 disables a limit)")
+    calm.add_argument("--max-speed", type=float, default=0.5, help="walking, m/s")
+    calm.add_argument("--max-yaw-rate", type=float, default=0.6, help="turning, rad/s")
+    calm.add_argument("--smooth-tau", type=float, default=0.04, help="arm/waist target filter, s")
+    calm.add_argument("--max-arm-speed", type=float, default=3.0, help="arm targets, rad/s")
+    calm.add_argument("--max-waist-speed", type=float, default=1.0, help="waist targets, rad/s")
+    calm.add_argument(
+        "--no-planner-hold", action="store_true", help="use the planner's first idle plan"
+    )
     args = ap.parse_args()
+    for name in ("max_arm_speed", "max_waist_speed"):
+        if getattr(args, name) <= 0:
+            setattr(args, name, np.inf)
 
     from safety import Watchdog
 
     policy = TeleopPolicy(args.onnx, device=args.policy_device)
     if args.robot == "mujoco":
         robot = MujocoRobot(policy.meta, args.profile, args.delay_ms, viewer=args.viewer)
-        robot.realtime = args.realtime or args.viewer or args.input == "quest"
+        robot.realtime = args.realtime or args.viewer or args.input in ("quest", "keys")
     else:
         robot = UnitreeRobot(policy.meta, args.interface, args.domain)
     if args.input == "quest":
@@ -389,6 +425,11 @@ def main() -> None:
     elif args.input.startswith("replay:"):
         operator = ReplayOperator(Path(args.input.split(":", 1)[1]))
         read = operator.read
+    elif args.input == "keys":
+        from keyboard import KeyboardOperator
+
+        operator = KeyboardOperator(engage_at=0.0 if args.robot == "mujoco" else STAND_UP_S + 1.0)
+        read = operator.read
     else:
         operator = ScriptedOperator(
             program=args.input.split(":", 1)[1],
@@ -396,8 +437,12 @@ def main() -> None:
         )
         read = operator.read
     runtime = Runtime(
-        policy, robot, planner_device=args.planner_device, sync_planner=args.sync_planner
-    )
+        policy, robot, planner_device=args.planner_device, sync_planner=args.sync_planner,
+        max_speed=args.max_speed if args.max_speed > 0 else 0.8,
+        max_yaw_rate=args.max_yaw_rate if args.max_yaw_rate > 0 else 1.0,
+        smooth_tau=args.smooth_tau, max_arm_speed=args.max_arm_speed,
+        max_waist_speed=args.max_waist_speed, planner_hold=not args.no_planner_hold,
+    )  # fmt: skip
     if args.input.startswith("replay:") and operator.seeds:  # the recorded planner seeds
         seeds = iter(operator.seeds)
         rng = runtime.reference.model.rng
@@ -449,10 +494,12 @@ def main() -> None:
             elif phase == "stand_up":
                 a = min(1.0, (t - t_phase) / STAND_UP_S)
                 robot.command((1 - a) * stand_from + a * default)
+                robot.hands(*runtime.hands(sample, runtime.dt, engaged=False).values())
                 if a >= 1.0:
                     enter("hold")
             elif phase == "hold":
                 robot.command(default)
+                robot.hands(*runtime.hands(sample, runtime.dt, engaged=False).values())
                 if sample.valid and sample.buttons.get("A") and sample.buttons.get("X"):
                     runtime.engage(sample, t)
                     enter(
@@ -469,6 +516,8 @@ def main() -> None:
                         stopped = why
                         print(f"[run] SAFETY: {why} -> damping", flush=True)
                         break
+                if phase != "shadow":
+                    robot.hands(rec["hand_left"], rec["hand_right"])
                 if phase == "shadow":
                     robot.command(default)
                     if t - t_phase >= args.shadow_s:

@@ -12,6 +12,12 @@ In deterministic MuJoCo rollouts of the B+ policy, ~14 % of arm joint-velocity p
 * ``anti_shake_rel_ang_vel``: wrist and torso angular velocity *relative to the reference*
   beyond a deadzone. SONIC's version penalizes |omega| > 1.5 rad/s, which misses small fast
   jitter (+-0.02 rad at 8 Hz is ~1 rad/s) and penalizes an intended 2 Hz wave (~6 rad/s).
+
+"Calm" terms (stage B3, D18): as little motion as the reference does not ask for.
+
+* ``stance_foot_motion``: a robot foot moving while the reference foot stands: balance steps,
+  shuffles and sliding.
+* ``joint_vel_error_l2``: leg joint velocity beyond (or short of) the reference's.
 """
 
 from __future__ import annotations
@@ -58,6 +64,40 @@ class action_rate_l2_scaled(ManagerTermBase):  # noqa: N801
     def __call__(self, env, multipliers=None, action_name="joint_pos"):  # noqa: ARG002
         da = env.action_manager.action - env.action_manager.prev_action
         return torch.sum(self.m * da * da, dim=1)
+
+
+def stance_foot_motion(
+    env,
+    command_name: str,
+    foot_names: list[str],
+    height: float = 0.09,
+    speed: float = 0.15,
+) -> torch.Tensor:
+    """sum over feet of |v_foot - v_foot_ref|^2 while the *reference* foot stands (weight < 0).
+
+    A reference foot stands when its link is within ``height`` of the floor (standing, the R1's
+    ankle-roll link is 0.055-0.06 m up) and moves slower than ``speed`` horizontally: 73 % of
+    the eval clips' foot frames. The robot should then not lift or slide that foot: no balance
+    steps or shuffles the reference does not take (user request 2026-09-25). Relative to the
+    reference, so a heel or toe roll the reference makes costs nothing; the feet-slip and
+    contact-mismatch terms of legged_gym, ASAP 2502.01143 and PBHC 2506.12851 play this role.
+    """
+    command = env.command_manager.get_term(command_name)
+    idx = _get_body_indexes(command, foot_names)
+    ref_pos, ref_vel = command.body_pos_w[:, idx], command.body_lin_vel_w[:, idx]
+    ground = env.scene.env_origins[:, 2:3]
+    stance = ((ref_pos[..., 2] - ground) < height) & (ref_vel[..., :2].norm(dim=-1) < speed)
+    err = command.robot_body_lin_vel_w[:, idx] - ref_vel
+    return torch.sum(stance * torch.sum(err * err, dim=-1), dim=1)
+
+
+def joint_vel_error_l2(env, command_name: str, legs_only: bool = True) -> torch.Tensor:
+    """sum (dq - dq_ref)^2 over the leg joints (or all): motion the reference does not ask for."""
+    command = env.command_manager.get_term(command_name)
+    err = command.robot_joint_vel - command.joint_vel
+    if legs_only:
+        err = err[:, command.lower_joint_isaaclab_indices]
+    return torch.sum(err * err, dim=1)
 
 
 def anti_shake_rel_ang_vel(

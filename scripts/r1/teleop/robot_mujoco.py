@@ -35,10 +35,19 @@ PROFILES = {
 }
 
 
-def build_model(sim_dt: float = 0.001, floor_friction: float = 1.0) -> mujoco.MjModel:
+def build_model(
+    sim_dt: float = 0.001, floor_friction: float = 1.0, impratio: float = 10.0
+) -> mujoco.MjModel:
+    """The R1 on a floor. Friction: elliptic cones with ``impratio`` 10 (MuJoCo's default,
+    pyramidal with impratio 1, is soft: a standing policy's steady sideways foot force made the
+    feet creep apart ~3 mm/s, 56 mm in 20 s; PhysX and rubber soles hold). impratio 1 restores the
+    soft contacts the gates used before 2026-09-25."""
     spec = mujoco.MjSpec.from_file(str(MJCF))
     spec.option.timestep = sim_dt
     spec.option.integrator = mujoco.mjtIntegrator.mjINT_IMPLICITFAST
+    if impratio > 1.0:
+        spec.option.cone = mujoco.mjtCone.mjCONE_ELLIPTIC
+        spec.option.impratio = impratio
     floor = spec.worldbody.add_geom()
     floor.name, floor.type = "floor", mujoco.mjtGeom.mjGEOM_PLANE
     floor.size = [0, 0, 0.05]

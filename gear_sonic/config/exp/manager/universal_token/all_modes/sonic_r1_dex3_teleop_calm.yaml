@@ -1,0 +1,36 @@
+# @package _global_
+# Stage B3 of the Quest teleop policy (PLAN.md D18): the smooth preset (B2) plus "calm" terms,
+# so the robot moves predictably with as little unnecessary motion as possible (user request
+# 2026-09-25):
+#
+#  * stance_foot_motion: squared speed of a robot foot while the reference foot stands. The robot
+#    should not take balance steps or shuffle when the reference keeps a foot planted
+#    (feet-slip / contact-mismatch terms: legged_gym, ASAP 2502.01143, PBHC 2506.12851).
+#  * leg_joint_vel_error: sum (dq - dq_ref)^2 over the legs, leg motion the reference does not
+#    ask for (the planner's legs are observed, so their velocities are a fair target).
+#
+# The hands are built with the Dex3 fingers semi-closed (r1_spec.DEX3_HOLD_POSE).
+# Data: ++manager_env.commands.motion.motion_lib_cfg.motion_file=data/motion_lib_r1/B2
+# Warm start: B+ iteration 5000 (r1_init/teleop_bplus_it5000.pt); B2's weights lost tracking.
+
+defaults:
+  - /exp/manager/universal_token/all_modes/sonic_r1_dex3_teleop_smooth
+
+manager_env:
+  rewards:
+    stance_foot_motion:
+      _target_: isaaclab.managers.RewardTermCfg
+      func: gear_sonic.envs.manager_env.mdp.smoothness:stance_foot_motion
+      weight: -2.0  # a 0.3 s balance step at 0.5 m/s costs ~0.15, about 5 ticks of total reward
+      params:
+        command_name: "motion"
+        foot_names: ["left_ankle_roll_link", "right_ankle_roll_link"]
+        height: 0.09
+        speed: 0.15
+    leg_joint_vel_error:
+      _target_: isaaclab.managers.RewardTermCfg
+      func: gear_sonic.envs.manager_env.mdp.smoothness:joint_vel_error_l2
+      weight: -0.003  # B2 in MuJoCo: sum of squares ~10 (rad/s)^2 -> ~-0.03 per second
+      params:
+        command_name: "motion"
+        legs_only: true

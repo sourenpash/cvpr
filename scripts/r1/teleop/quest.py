@@ -22,6 +22,18 @@ import numpy as np
 XR_TO_ROBOT = np.array([[0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
 
 
+# WebXR device axes in robot-convention world coordinates for a device facing +x (forward = -z)
+FACING_X = np.array([[0.0, 0.0, -1.0], [-1.0, 0.0, 0.0], [0.0, 1.0, 0.0]])
+
+
+def device_pose(pos, R=None) -> np.ndarray:
+    """4x4 pose of a virtual device (scripted and keyboard operators)."""
+    m = np.eye(4)
+    m[:3, :3] = np.eye(3) if R is None else R
+    m[:3, 3] = pos
+    return m
+
+
 def xr_to_robot(pose: np.ndarray) -> np.ndarray:
     """4x4 pose of an XR device -> the same device pose with robot-convention world axes.
 

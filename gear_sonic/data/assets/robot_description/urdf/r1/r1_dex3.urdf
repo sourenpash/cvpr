@@ -1066,7 +1066,7 @@
     <parent link="head_pitch_link"/>
     <child link="head_yaw_link"/>
   </joint>
-  <!-- Dex3-1 L hand (unitree_ros dex3_1_l.urdf), fixed at the open pose -->
+  <!-- Dex3-1 L hand (unitree_ros dex3_1_l.urdf), fingers fixed at r1_spec.DEX3_HOLD_POSE (semi-closed) -->
   <joint name="left_hand_palm_joint" type="fixed">
     <origin xyz="0.08 0 0" rpy="0 0 0"/>
     <parent link="left_wrist_roll_link"/>
@@ -1238,36 +1238,36 @@
     <child link="left_hand_thumb_0_link"/>
   </joint>
   <joint name="left_hand_thumb_1_joint" type="fixed">
-    <origin xyz="-0.0025 -0.0193 0" rpy="0 0 0"/>
+    <origin xyz="-0.0025 -0.0193 0" rpy="0 0 0.3"/>
     <parent link="left_hand_thumb_0_link"/>
     <child link="left_hand_thumb_1_link"/>
   </joint>
   <joint name="left_hand_thumb_2_joint" type="fixed">
-    <origin xyz="0 -0.0458 0" rpy="0 0 0"/>
+    <origin xyz="0 -0.0458 0" rpy="0 0 0.7"/>
     <parent link="left_hand_thumb_1_link"/>
     <child link="left_hand_thumb_2_link"/>
   </joint>
   <joint name="left_hand_middle_0_joint" type="fixed">
-    <origin xyz="0.0777 0.0016 -0.0285" rpy="0 0 0"/>
+    <origin xyz="0.0777 0.0016 -0.0285" rpy="0 0 -0.8"/>
     <parent link="left_hand_palm_link"/>
     <child link="left_hand_middle_0_link"/>
   </joint>
   <joint name="left_hand_middle_1_joint" type="fixed">
-    <origin xyz="0.0458 0 0" rpy="0 0 0"/>
+    <origin xyz="0.0458 0 0" rpy="0 0 -0.9"/>
     <parent link="left_hand_middle_0_link"/>
     <child link="left_hand_middle_1_link"/>
   </joint>
   <joint name="left_hand_index_0_joint" type="fixed">
-    <origin xyz="0.0777 0.0016 0.0285" rpy="0 0 0"/>
+    <origin xyz="0.0777 0.0016 0.0285" rpy="0 0 -0.8"/>
     <parent link="left_hand_palm_link"/>
     <child link="left_hand_index_0_link"/>
   </joint>
   <joint name="left_hand_index_1_joint" type="fixed">
-    <origin xyz="0.0458 0 0" rpy="0 0 0"/>
+    <origin xyz="0.0458 0 0" rpy="0 0 -0.9"/>
     <parent link="left_hand_index_0_link"/>
     <child link="left_hand_index_1_link"/>
   </joint>
-  <!-- Dex3-1 R hand (unitree_ros dex3_1_r.urdf), fixed at the open pose -->
+  <!-- Dex3-1 R hand (unitree_ros dex3_1_r.urdf), fingers fixed at r1_spec.DEX3_HOLD_POSE (semi-closed) -->
   <joint name="right_hand_palm_joint" type="fixed">
     <origin xyz="0.08 0 0" rpy="0 0 0"/>
     <parent link="right_wrist_roll_link"/>
@@ -1439,32 +1439,32 @@
     <child link="right_hand_thumb_0_link"/>
   </joint>
   <joint name="right_hand_thumb_1_joint" type="fixed">
-    <origin xyz="-0.0025 0.0193 0" rpy="0 0 0"/>
+    <origin xyz="-0.0025 0.0193 0" rpy="0 0 -0.3"/>
     <parent link="right_hand_thumb_0_link"/>
     <child link="right_hand_thumb_1_link"/>
   </joint>
   <joint name="right_hand_thumb_2_joint" type="fixed">
-    <origin xyz="0 0.0458 0" rpy="0 0 0"/>
+    <origin xyz="0 0.0458 0" rpy="0 0 -0.7"/>
     <parent link="right_hand_thumb_1_link"/>
     <child link="right_hand_thumb_2_link"/>
   </joint>
   <joint name="right_hand_middle_0_joint" type="fixed">
-    <origin xyz="0.0777 -0.0016 -0.0285" rpy="0 0 0"/>
+    <origin xyz="0.0777 -0.0016 -0.0285" rpy="0 0 0.8"/>
     <parent link="right_hand_palm_link"/>
     <child link="right_hand_middle_0_link"/>
   </joint>
   <joint name="right_hand_middle_1_joint" type="fixed">
-    <origin xyz="0.0458 0 0" rpy="0 0 0"/>
+    <origin xyz="0.0458 0 0" rpy="0 0 0.9"/>
     <parent link="right_hand_middle_0_link"/>
     <child link="right_hand_middle_1_link"/>
   </joint>
   <joint name="right_hand_index_0_joint" type="fixed">
-    <origin xyz="0.0777 -0.0016 0.0285" rpy="0 0 0"/>
+    <origin xyz="0.0777 -0.0016 0.0285" rpy="0 0 0.8"/>
     <parent link="right_hand_palm_link"/>
     <child link="right_hand_index_0_link"/>
   </joint>
   <joint name="right_hand_index_1_joint" type="fixed">
-    <origin xyz="0.0458 0 0" rpy="0 0 0"/>
+    <origin xyz="0.0458 0 0" rpy="0 0 0.9"/>
     <parent link="right_hand_index_0_link"/>
     <child link="right_hand_index_1_link"/>
   </joint>

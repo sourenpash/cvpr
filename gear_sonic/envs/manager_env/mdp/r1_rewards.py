@@ -17,3 +17,5 @@ class R1SmoothRewardsCfg(RewardsCfg):
     action_rate_l2_scaled = None
     anti_shake_rel_ang_vel = None
     tracking_wrist_linvel = None
+    stance_foot_motion = None
+    leg_joint_vel_error = None
