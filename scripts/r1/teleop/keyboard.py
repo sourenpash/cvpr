@@ -8,7 +8,7 @@ and hands follow keys typed in the terminal running ``run.py``:
     q / e       turn left / right (right stick; again to turn faster)
     space       stop: sticks centered (the planner stands; facing is kept)
     1 2 3 4 5   hands: rest, wave (right), point (right), both hands up, reach forward
-    g / t / o   fingers of both hands: point / fist / open (toggles; the default is semi-closed)
+    g / t / o   fingers of both hands: point / fist / open (toggles; only with run.py --hands)
     Ctrl-C      quit
 
 The sticks drive SONIC's kinematic planner exactly as the Quest's do (``reference.StickState``):

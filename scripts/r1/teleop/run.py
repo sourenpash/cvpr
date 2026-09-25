@@ -11,8 +11,9 @@ At 50 Hz:
    smoothed and speed-limited in joint space;
 4. the observation, exactly as in training (``observations.py``), the ONNX policy
    (``policy.py``), joint targets ``default + scale * clip(a)``;
-5. the robot: MuJoCo (``robot_mujoco.py``) or the real R1 (``robot_unitree.py``), with the
-   Dex3 fingers semi-closed or shaped by the controllers' grip and trigger (``hands.py``).
+5. the robot: MuJoCo (``robot_mujoco.py``) or the real R1 (``robot_unitree.py``). The Dex3 hands
+   are attached but not commanded; ``--hands`` holds them semi-closed and lets the controllers'
+   grip and trigger shape them (``hands.py``).
 
 Calm defaults (user request 2026-09-25): walking at up to 0.5 m/s and turning at 0.6 rad/s
 (SONIC's gamepad: 0.8 m/s, 1 rad/s), arm joints at up to 3 rad/s, and the planner holds the
@@ -230,10 +231,10 @@ class UnitreeRobot:
 
     realtime = True
 
-    def __init__(self, meta: dict, interface: str, domain: int = 0):
+    def __init__(self, meta: dict, interface: str, domain: int = 0, hands: bool = False):
         from robot_unitree import UnitreeR1
 
-        self.r1 = UnitreeR1(meta, interface, domain)
+        self.r1 = UnitreeR1(meta, interface, domain, enable_hands=hands)
         self.r1.wait_for_state()
 
     def state(self) -> dict[str, np.ndarray]:
@@ -279,6 +280,7 @@ class Runtime:
         max_arm_speed: float = 3.0,
         max_waist_speed: float = 1.0,
         planner_hold: bool = True,
+        hands: bool = False,
     ):
         self.policy, self.meta, self.robot = policy, policy.meta, robot
         self.builder = ob.ObservationBuilder(self.meta)
@@ -295,7 +297,7 @@ class Runtime:
             max_arm_speed=max_arm_speed,
             max_waist_speed=max_waist_speed,
         )
-        self.hands = HandShaper()
+        self.hands = HandShaper() if hands else None  # None: the Dex3s are not commanded
         self.default_vr = self.targets.terms(self.targets.ik.q0)
         self.sync_planner = sync_planner
         self.engaged = False
@@ -321,7 +323,7 @@ class Runtime:
         if alpha < 1.0:  # ramp the targets in from the default pose (joint space of the IK)
             q = (1 - alpha) * self.targets.ik.q0 + alpha * vr["q"]
             vr = self.targets.terms(q)
-        fingers = self.hands(sample, self.dt)
+        fingers = self.hands(sample, self.dt) if self.hands else None
         tok = {
             "motion_anchor_ori_heading": ob.anchor_ori_heading(state["quat"], ref["ref_root_quat"]),
             "command_multi_future_lower_body": ref["command_multi_future_lower_body"],
@@ -342,11 +344,13 @@ class Runtime:
             "left_stick": sample.left_stick, "right_stick": sample.right_stick,
             "cmd_mode": cmd.mode, "cmd_speed": cmd.speed, "cmd_move": cmd.move_dir, "cmd_face": cmd.face_dir,
             "ref_g1_qpos": ref["g1_qpos"], "obs": obs, "action": action, "q_ik": vr["q"],
-            "q_ik_raw": vr["q_ik"], "hand_left": fingers["left"], "hand_right": fingers["right"],
+            "q_ik_raw": vr["q_ik"],
             "robot_q": state["q"], "robot_dq": state["dq"], "robot_quat": state["quat"], "robot_pos": state["pos"],
             "infer_ms": infer_ms, "planner_latency_ticks": self.reference.loop.last_latency_ticks,
             "target": target, "wall": time.perf_counter(),
         }  # fmt: skip
+        if fingers is not None:
+            rec.update(hand_left=fingers["left"], hand_right=fingers["right"])
         for k, v in rec.items():
             self.log.setdefault(k, []).append(np.asarray(v))
         return rec
@@ -404,6 +408,12 @@ def main() -> None:
     calm.add_argument(
         "--no-planner-hold", action="store_true", help="use the planner's first idle plan"
     )
+    ap.add_argument(
+        "--hands",
+        action="store_true",
+        help="command the Dex3 fingers (semi-closed hold, controller grip/trigger shaping); "
+        "by default the hands are attached but not commanded",
+    )
     args = ap.parse_args()
     for name in ("max_arm_speed", "max_waist_speed"):
         if getattr(args, name) <= 0:
@@ -416,7 +426,7 @@ def main() -> None:
         robot = MujocoRobot(policy.meta, args.profile, args.delay_ms, viewer=args.viewer)
         robot.realtime = args.realtime or args.viewer or args.input in ("quest", "keys")
     else:
-        robot = UnitreeRobot(policy.meta, args.interface, args.domain)
+        robot = UnitreeRobot(policy.meta, args.interface, args.domain, hands=args.hands)
     if args.input == "quest":
         from quest import QuestInput
 
@@ -442,6 +452,7 @@ def main() -> None:
         max_yaw_rate=args.max_yaw_rate if args.max_yaw_rate > 0 else 1.0,
         smooth_tau=args.smooth_tau, max_arm_speed=args.max_arm_speed,
         max_waist_speed=args.max_waist_speed, planner_hold=not args.no_planner_hold,
+        hands=args.hands,
     )  # fmt: skip
     if args.input.startswith("replay:") and operator.seeds:  # the recorded planner seeds
         seeds = iter(operator.seeds)
@@ -494,12 +505,14 @@ def main() -> None:
             elif phase == "stand_up":
                 a = min(1.0, (t - t_phase) / STAND_UP_S)
                 robot.command((1 - a) * stand_from + a * default)
-                robot.hands(*runtime.hands(sample, runtime.dt, engaged=False).values())
+                if runtime.hands:
+                    robot.hands(*runtime.hands(sample, runtime.dt, engaged=False).values())
                 if a >= 1.0:
                     enter("hold")
             elif phase == "hold":
                 robot.command(default)
-                robot.hands(*runtime.hands(sample, runtime.dt, engaged=False).values())
+                if runtime.hands:
+                    robot.hands(*runtime.hands(sample, runtime.dt, engaged=False).values())
                 if sample.valid and sample.buttons.get("A") and sample.buttons.get("X"):
                     runtime.engage(sample, t)
                     enter(
@@ -516,7 +529,7 @@ def main() -> None:
                         stopped = why
                         print(f"[run] SAFETY: {why} -> damping", flush=True)
                         break
-                if phase != "shadow":
+                if runtime.hands and phase != "shadow":
                     robot.hands(rec["hand_left"], rec["hand_right"])
                 if phase == "shadow":
                     robot.command(default)

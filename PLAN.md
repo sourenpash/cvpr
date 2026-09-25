@@ -190,10 +190,10 @@ Task IDs (M = Mac-side, G = GPU-box) are referenced from §5.
   - `safety.py` watchdog. `run.py` phases: damping → stand-up 3 s → hold → A + X → shadow → blend 2 s → run.
   - `dds_sim.py`: MuJoCo behind the same DDS topics, with a gantry band. On loopback, discovery uses a unicast peer.
   - **DDS closed loop:** 45 s of stand-up, shadow, blend, walking + reaching, gantry released at 9 s. No trips; tick period p50 20.0 ms, p95 21.0 ms, max 23.2 ms; max tilt 12°.
-  - **Dex3 hands** (`hands.py`, D18): the DDS process publishes `rt/dex3/{left,right}/cmd` at 100 Hz from stand-up on (xr_teleoperate's kp 1.5, kd 0.2, RIS mode byte); the fingers go limp in damping.
-    - Default: the semi-closed hold pose the model is built with.
-    - Controller: grip = point, grip + trigger = fist, trigger = pinch, A / X = open hand.
-  - Open: the hardware checks (`robot_unitree.py --check`); the Dex3 motor order and signs (VERIFY).
+  - **Dex3 hands: attached, not commanded** (user decision 2026-09-25). Nothing is published on `rt/dex3/*`.
+    - `run.py --hands` (`hands.py`, D18) turns on 100 Hz finger targets: the semi-closed hold pose; controller grip = point, grip + trigger = fist, trigger = pinch, A / X = open. xr_teleoperate's kp 1.5, kd 0.2, RIS mode byte.
+    - DDS-sim check: with `--hands` both hands get the hold pose in motor order; without it, no hand messages.
+  - Open: the hardware checks (`robot_unitree.py --check`). If the hands are ever used: the Dex3 motor order and signs (VERIFY), and the pose uncommanded fingers sit in (the model has them semi-closed).
 - [ ] **Q5** Real-robot bring-up and demo takes.
 - [x] **Q6 Smoothness and gestures, stage B2** (D17; stopped 2026-09-25 17:30 at iteration ~1030, superseded by B3). Preset `sonic_r1_dex3_teleop_smooth.yaml`, run `sonic_r1_dex3_teleop_smooth_stage_b2`, launched 2026-09-25 14:02 from B+ iteration 5000 (`r1_init/teleop_bplus_it5000.pt`). Log `logs_rl/console/teleop_stage_b2.log`.
   - **Why.** B+ jitters in MuJoCo (`scripts/r1/teleop/sim_gate.py`, 60 s walk + wave, #51 actuators):
@@ -224,7 +224,7 @@ Task IDs (M = Mac-side, G = GPU-box) are referenced from §5.
     - The 3–4× leg action-rate multipliers also slow the legs.
     - The jitter itself is the policy's: frictionless actuators jitter more in MuJoCo, not less.
 - [~] **Q7 Calm motion and semi-closed hands, stage B3** (D18; user request 2026-09-25: no balance steps, a little slower, predictable, as little unnecessary motion as possible).
-  - **Hands.** `r1_spec.DEX3_HOLD_POSE` is a relaxed semi-closed fist. `build_r1_assets.py` bakes it into the fixed finger joints of the URDF and MJCF (rendered and checked), and the real hands hold the same pose (Q4).
+  - **Hands.** `r1_spec.DEX3_HOLD_POSE` is a relaxed semi-closed fist. `build_r1_assets.py` bakes it into the fixed finger joints of the URDF and MJCF (rendered and checked). The real hands are not commanded for now (Q4); `--hands` makes them hold the same pose.
   - **Rewards** (`sonic_r1_dex3_teleop_calm.yaml` = the smooth preset plus two terms in `mdp/smoothness.py`):
     - `stance_foot_motion` −2: |v_foot − v_foot_ref|² while the reference foot stands (ankle link < 9 cm, slower than 0.15 m/s: 73 % of eval-clip foot frames). This targets balance steps, shuffles and slides.
     - `leg_joint_vel_error` −0.003: Σ (dq − dq_ref)² over the legs.
@@ -244,6 +244,23 @@ Task IDs (M = Mac-side, G = GPU-box) are referenced from §5.
     - Calm terms and semi-closed hands as above.
     - Evals at iterations 500 and 1000, then every 1000.
     - Iteration 10: stance_foot_motion −0.17 per second, leg_joint_vel_error −0.02, against +2.3 of tracking reward; 10.8 s per iteration.
+  - **B3 outcome: stopped at iteration ~520 (19:21).**
+    - Isaac uniform eval at 500: 0.749 (planner 0.575, mocap 0.783, Kimodo 0.935) vs B+ 0.845 (0.752 / 0.859 / 0.977).
+    - MuJoCo gate (`gate_b3_it500.json`), vs B+ in the same sim and runtime:
+      - clip success 0.82 vs 0.83;
+      - errors larger: leg MPJPE 34.0 vs 31.6 mm, VR 3-point 45.8 vs 39.9 mm;
+      - not smoother: arms above 5 Hz 0.117 vs 0.102 rad/s;
+      - only foot slip improved: 12.7 vs 16.6 mm/s.
+    - Reading: both runs capped the exploration std at 0.25 and added penalties. The Isaac eval runs under the training randomization, so the gap may be robustness as much as nominal tracking.
+  - **What delivered "calm": the runtime.** B+ with the calm runtime and stiff MuJoCo friction (`gate_bplus_it4500_v2sim.json`):
+    - arms above 5 Hz 0.102 rad/s (0.177 before), legs 0.194 (0.355);
+    - no unplanned steps; 1.9 mm foot drift standing 20 s;
+    - clip success 0.83 (0.85 before).
+- [~] **Q8 B4: B+ continued on the gesture-rich data** (robust preset, no smoothness or calm terms).
+  - Run `sonic_r1_dex3_teleop_robust_stage_b4-20260925_192255`, W&B `2io21cm1`, log `logs_rl/console/teleop_stage_b4.log`.
+  - Launched 19:22 from B+ iteration 5000 (`r1_init/teleop_bplus_it5000.pt`) on `data/motion_lib_r1/B2` (adds S2 gesture mocap and Kimodo), with the semi-closed hand model; 9.2 s per iteration.
+  - Evals at 500 and 1000, then every 1000.
+  - Robot candidate until B4 beats it: B+ iteration 4500 with the calm runtime.
 
 ---
 
@@ -614,7 +631,14 @@ caveat (position tracked strongly; orientation reduced to palm-normal).
 
     Both are zero when tracking is perfect, so they do not fight the tracking terms, unlike a plain feet-slip or joint-velocity penalty.
   - The planner's own idle settling step is removed at the source: `PlannerLoop.hold`.
-  - The fingers are not part of the policy. The model is built with the fingers welded in the hold pose, and a separate grasp synergy drives the real hands (`hands.py`). Hand-tracking retargeting and learned finger control come after the talk.
+  - **Result (Q7):**
+    - The runtime half delivered: jitter −42 % (arms) and −45 % (legs), no balance steps.
+    - The reward half, stacked on B2's corrected smoothness setup (B3), cost 10 points of randomized success in 500 iterations without smoother motion.
+    - The calm preset stays available but is not used; B4 continues B+'s recipe.
+  - The fingers are not part of the policy. The model is built with the fingers welded in the hold pose.
+    - The real hands are attached but not commanded for now (user decision 2026-09-25).
+    - `--hands` drives them with a grasp synergy (`hands.py`).
+    - Hand-tracking retargeting and learned finger control come after the talk.
 
 ## 7. Risks
 

@@ -14,11 +14,13 @@ in zero torque and watch ``python scripts/r1/teleop/robot_unitree.py --check <if
 
 All DDS traffic runs in a child process: at 500 Hz it takes ``lowstate`` and publishes
 ``lowcmd`` (training PD gains, ``mode_pr`` = PR for the ankles, ``mode_machine`` copied from
-``lowstate``, CRC), and at 100 Hz the Dex3 finger targets on ``rt/dex3/{left,right}/cmd``
-(``hands.py``; the fingers hold a semi-closed pose unless the operator shapes them, and go limp
-in damping). Python (de)serialization of these messages costs ~0.5 ms each, which in the
-policy process would starve the 50 Hz loop of the GIL. The processes share the latest state
-and the joint targets through shared memory. IMU quaternion (w, x, y, z), gyro in the body frame.
+``lowstate``, CRC). The Dex3 hands are attached but not commanded: nothing is published on
+``rt/dex3/*`` (user decision 2026-09-25). With ``enable_hands`` (``run.py --hands``) the process
+also publishes finger targets there at 100 Hz (``hands.py``: a semi-closed hold pose unless the
+operator shapes them; limp in damping). Python (de)serialization of these messages costs
+~0.5 ms each, which in the policy process would starve the 50 Hz loop of the GIL. The
+processes share the latest state and the joint targets through shared memory. IMU quaternion
+(w, x, y, z), gyro in the body frame.
 """
 
 from __future__ import annotations
@@ -104,7 +106,9 @@ class _Shared:
         self.stop = CTX.Event()
 
 
-def _dds_process(shared: _Shared, slots, kp, kd, head_kp, head_kd, damping_kd, domain, interface):
+def _dds_process(
+    shared: _Shared, slots, kp, kd, head_kp, head_kd, damping_kd, domain, interface, enable_hands
+):
     from cyclonedds.qos import Policy, Qos
     from cyclonedds.sub import DataReader
     from cyclonedds.topic import Topic
@@ -127,7 +131,7 @@ def _dds_process(shared: _Shared, slots, kp, kd, head_kp, head_kd, damping_kd, d
     pub.Init()
     cmd, crc = unitree_hg_msg_dds__LowCmd_(), CRC()
     hand_pubs, hand_cmds = {}, {}
-    for side in ("left", "right"):
+    for side in ("left", "right") if enable_hands else ():
         hand_pubs[side] = ChannelPublisher(f"rt/dex3/{side}/cmd", HandCmd_)
         hand_pubs[side].Init()
         hand_cmds[side] = unitree_hg_msg_dds__HandCmd_()
@@ -168,7 +172,7 @@ def _dds_process(shared: _Shared, slots, kp, kd, head_kp, head_kd, damping_kd, d
                 cmd.crc = crc.Crc(cmd)
                 pub.Write(cmd)
         hand_mode = shared.hand_mode.value
-        if hand_mode != PASSIVE and tick % 5 == 0:  # 100 Hz
+        if hand_pubs and hand_mode != PASSIVE and tick % 5 == 0:  # 100 Hz
             with shared.lock:
                 hand_q = list(shared.hands[:])
             for h, side in enumerate(("left", "right")):
@@ -193,8 +197,10 @@ class UnitreeR1:
         head_kp: float = 8.0,
         head_kd: float = 0.5,
         damping_kd: float = 3.0,
+        enable_hands: bool = False,
     ):
         names = meta["joint_names_isaaclab"]
+        self.enable_hands = enable_hands
         self.slots = [R1_SLOTS[n] for n in names]  # policy (Isaac) order -> motor slot
         self.n = len(self.slots)
         self.shared = _Shared(self.n)
@@ -202,7 +208,7 @@ class UnitreeR1:
         self.process = CTX.Process(
             target=_dds_process,
             args=(self.shared, self.slots, list(map(float, meta["kp"])), list(map(float, meta["kd"])),
-                  head_kp, head_kd, damping_kd, domain, interface),
+                  head_kp, head_kd, damping_kd, domain, interface, enable_hands),
             daemon=True, name="r1_dds",
         )  # fmt: skip
         self.process.start()
@@ -242,6 +248,8 @@ class UnitreeR1:
 
     def hands(self, left: np.ndarray, right: np.ndarray) -> None:
         """Dex3 finger targets (``hands.FINGERS`` order per hand); starts the hand commands."""
+        if not self.enable_hands:
+            raise RuntimeError("the Dex3 hands are not commanded (UnitreeR1(enable_hands=True))")
         from hands import to_motor_order
 
         q = np.concatenate([to_motor_order(left, "left"), to_motor_order(right, "right")])

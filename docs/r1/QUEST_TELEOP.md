@@ -72,7 +72,7 @@ $PY scripts/r1/teleop/run.py --onnx $M.onnx --input keys --viewer --seconds 3600
 | q / e | turn left / right |
 | space | stop (the robot stands; it keeps its facing) |
 | 1 2 3 4 5 | hands: rest, wave (right), point (right), both hands up, reach forward |
-| g / t / o | fingers: point / fist / open (logged; the MuJoCo fingers are fixed) |
+| g / t / o | fingers: point / fist / open (only with `--hands`; the MuJoCo fingers are fixed) |
 
 **Calm motion (defaults, D18).** Every run applies these limits; `0` turns one off:
 
@@ -112,7 +112,10 @@ while the reference stands completely still.
 
    The left stick is a velocity command: SONIC's kinematic planner turns it into leg motion.
 
-   | Fingers (Dex3, each hand) | Pose |
+   **Fingers: not used for now** (decision 2026-09-25). The Dex3 hands are attached but not
+   commanded, and nothing is sent on `rt/dex3/*`. `--hands` turns on finger control:
+
+   | Fingers (Dex3, each hand, `--hands` only) | Pose |
    |---|---|
    | nothing pressed | semi-closed (the hold pose the policy was trained with) |
    | grip | point: index out, middle finger and thumb closed |
@@ -182,15 +185,16 @@ while the reference stands completely still.
 
    Each stage takes 3 × 1 min without a trip before the next.
 
-**Dex3 hands.**
-- The DDS process publishes `rt/dex3/{left,right}/cmd` at 100 Hz from stand-up on: the hold pose,
-  then the operator's finger poses once engaged. Parameters are xr_teleoperate's: kp 1.5, kd 0.2,
-  RIS mode byte.
-- In damping the fingers go limp (kp 0).
-- VERIFY at bring-up, hanging, before stand-up:
+**Dex3 hands: attached, not commanded** (default; nothing is published on `rt/dex3/*`).
+- With `--hands`, the DDS process publishes `rt/dex3/{left,right}/cmd` at 100 Hz from stand-up on:
+  - the hold pose, then the operator's finger poses once engaged;
+  - xr_teleoperate's parameters: kp 1.5, kd 0.2, RIS mode byte;
+  - limp fingers in damping (kp 0).
+- Before using `--hands`, VERIFY with the robot hanging:
   - each hand's motor order: left thumb 0–2, middle 0–1, index 0–1; right thumb 0–2, index 0–1, middle 0–1;
-  - that closing is negative on the left and positive on the right;
-  - the look of each pose.
+  - that closing is negative on the left and positive on the right.
+- The policy's model has the fingers fixed semi-closed. Note what pose the uncommanded fingers
+  actually sit in; the model can match it at the next training restart (`r1_spec.DEX3_HOLD_POSE`).
 
 Not done yet:
 - Driving the head motors from the headset. They are held at 0.
