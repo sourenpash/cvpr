@@ -14,6 +14,8 @@ from gear_sonic.utils.embodiment import r1_spec as spec
 
 MOTION_YAML = REPO / "gear_sonic/config/manager_env/commands/terms/motion.yaml"
 TELEOP_PRESET = PRESET.with_name("sonic_r1_dex3_teleop.yaml")
+EVENTS = REPO / "gear_sonic/envs/manager_env/mdp/events.py"
+R1_EVENTS = REPO / "gear_sonic/envs/manager_env/mdp/r1_events.py"
 
 
 @pytest.fixture(scope="module", params=[PRESET, TELEOP_PRESET], ids=lambda p: p.stem)
@@ -32,9 +34,9 @@ def test_preset_robot_type_and_asset(preset):
     assert motion["motion_lib_cfg"]["asset"]["assetFileName"] == spec.MJCF_FILE_NAME
     assert motion["motion_lib_cfg"]["robot_type"] == spec.ROBOT_TYPE
     assert motion["motion_lib_cfg"]["wrist_mujoco_dof_indices"] == spec.WRIST_MUJOCO_DOF_INDICES
-    assert (
-        "upper_body_augment_prefixes" not in motion["motion_lib_cfg"]
-    ), "G1-specific motion-name prefixes"
+    # Upper-body grafting may only target our planner clips, never NVIDIA's G1 clip names.
+    prefixes = motion["motion_lib_cfg"].get("upper_body_augment_prefixes", [])
+    assert all(p.startswith("planner_") for p in prefixes), prefixes
 
 
 def test_preset_tracking_points_match_spec(preset):
@@ -98,6 +100,45 @@ def test_teleop_preset_builds_only_the_quest_path():
     assert set(backbone.encoders.teleop.inputs) <= set(cfg.manager_env.observations.tokenizer)
     assert not any("smpl" in k for k in cfg.manager_env.observations.tokenizer), tokenizer
     assert cfg.manager_env.commands.motion.motion_lib_cfg.smpl_motion_file == "dummy"
+    # Reach-while-walking: planner clips get the upper body of a random mocap clip.
+    motion = cfg.manager_env.commands.motion
+    assert motion.cat_upper_body_poses
+    assert list(motion.motion_lib_cfg.upper_body_augment_prefixes) == ["planner_"]
+
+
+def test_teleop_robust_preset_adds_only_robustness_terms():
+    """sonic_r1_dex3_teleop_robust = the teleop preset + latency, armature and gain randomization."""
+    hydra = pytest.importorskip("hydra")
+
+    from gear_sonic.utils import config_utils
+
+    config_utils.register_rl_resolvers()
+    exp = "+exp=manager/universal_token/all_modes/sonic_r1_dex3_teleop"
+    with hydra.initialize_config_dir(
+        config_dir=str(REPO / "gear_sonic/config"), version_base="1.1"
+    ):
+        base = hydra.compose(config_name="base", overrides=[exp])
+        robust = hydra.compose(config_name="base", overrides=[exp + "_robust"])
+    assert robust.algo.config.actor.backbone == base.algo.config.actor.backbone
+    assert robust.manager_env.observations == base.manager_env.observations
+    assert robust.manager_env.commands == base.manager_env.commands
+    action = robust.manager_env.actions.joint_pos
+    assert action._target_.endswith("delayed_actions.DelayedJointPositionActionCfg")
+    assert list(action.delay_substeps_range) == [0, 4]  # 0-20 ms at sim.dt = 5 ms
+    events = robust.manager_env.events
+    legs = events.r1_leg_armature.params.armature_distribution_params
+    ankles = events.r1_ankle_armature.params.armature_distribution_params
+    assert legs[0] < 0.05 < legs[1] and ankles[0] < 0.10 < ankles[1]  # unitree_rl_mjlab #51
+    assert robust.callbacks.periodic_eval.eval_frequency == 1000
+    # EventCfg only accepts declared fields: every added term needs one in R1RobustEventCfg.
+    assert events._target_.endswith("r1_events.R1RobustEventCfg")
+    declared = set(re.findall(r"^    (\w+) = None$", R1_EVENTS.read_text(), re.M)) | set(
+        re.findall(r"^    (\w+) = None$", EVENTS.read_text().split("def ")[0], re.M)
+    )
+    assert set(events) - {"_target_"} <= declared, set(events) - declared
+    friction = events.r1_joint_friction
+    assert friction.func.endswith("joint_friction:randomize_joint_friction_torque")
+    assert friction.params.torque[".*_knee_joint"] == 2.5 and friction.mode == "startup"
 
 
 def test_all_referenced_bodies_exist_in_urdf(preset, urdf_bodies):

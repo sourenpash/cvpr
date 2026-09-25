@@ -117,6 +117,10 @@ manager_env:
         robot_type: r1_dex3
         # MuJoCo DOF indices of the wrist joints for randomize_wrist_poses (R1: wrist roll only).
         wrist_mujoco_dof_indices: [18, 23]
+        # Upper-body grafting (cat_upper_body_poses): a planner clip gets the waist + arms of a
+        # random mocap clip, i.e. reaching and gesturing while walking. The default prefixes are
+        # NVIDIA's own planner clip names; ours come from generate_planner_motions.py.
+        upper_body_augment_prefixes: ["planner_"]
         adaptive_sampling:
           adp_samp_failure_rate_max_over_mean: 200
         motion_file: null # REQUIRED on the command line (R1 motion_lib PKL directory)

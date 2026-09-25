@@ -12,6 +12,8 @@ its end), then training resumes. Success rate and MPJPE-style errors (all bodies
 from __future__ import annotations
 
 import importlib.util
+import json
+import os
 import sys
 import types
 
@@ -64,6 +66,7 @@ class PeriodicEvalCallback(ImEvalCallback):
         metrics = super()._post_evaluate_policy(eval_res)
         outcome = [(k, 0.0) for k in eval_res.get("failed_keys", [])]
         outcome += [(k, 1.0) for k in eval_res.get("success_keys", [])]
+        self._outcome = {str(k): bool(ok) for k, ok in outcome}
         for group in ("planner", "mocap"):
             values = [
                 ok for k, ok in outcome if str(k).startswith("planner_") == (group == "planner")
@@ -89,3 +92,9 @@ class PeriodicEvalCallback(ImEvalCallback):
             wandb.log(scalars, step=step)
         rates = {k.split("/")[-1]: round(v, 4) for k, v in scalars.items() if "success_rate" in k}
         print(f"[PeriodicEval] iteration {step}: {rates}")
+        # Per-clip outcomes, e.g. to compare with MuJoCo sim-to-sim (scripts/r1/teleop/play_clips.py)
+        out_dir = getattr(args, "output_dir", None)
+        if self.accelerator.is_main_process and out_dir and getattr(self, "_outcome", None):
+            os.makedirs(os.path.join(out_dir, "eval"), exist_ok=True)
+            with open(os.path.join(out_dir, "eval", f"iteration_{step:06d}.json"), "w") as f:
+                json.dump({"iteration": step, **rates, "clips": self._outcome}, f, indent=1)

@@ -117,6 +117,81 @@ Task IDs (M = Mac-side, G = GPU-box) are referenced from §5.
 - [ ] **G7** Evaluation incl. EE-tracking metrics and MuJoCo sim-to-sim (§5.G7)
 - [ ] **G8** ONNX export + `docs/r1/INTERFACE.md` (§5.G8)
 
+### Quest demo track (real-R1 video in 5 days; plan approved 2026-09-25, D16)
+
+- [x] **Q0 Final training run B+** (`sonic_r1_dex3_teleop_stage_bplus`, W&B `oarg3uey`, log
+  `logs_rl/console/teleop_stage_bplus.log`, launched 2026-09-25 01:03 from A2's iteration 2000 =
+  `r1_init/teleop_a2_it2000.pt`). A2's uniform eval, success overall / planner / mocap:
+
+  | A2 iteration | 1000 | 1500 | 2000 | 2500 |
+  |---|---|---|---|---|
+  | overall | 0.877 | 0.896 | **0.909** | 0.865 |
+  | planner | 0.790 | 0.800 | **0.875** | 0.770 |
+  | mocap | 0.913 | 0.936 | **0.924** | 0.905 |
+
+  B+ = `sonic_r1_dex3_teleop_robust.yaml` on `data/motion_lib_r1/B` (1875 clips):
+  - Data: S0_cf 472, S1 803, planner_v2_cf 200, planner_v3 400.
+    - S1 (`curate_bones_s1.py`): 1000 standing gesture, in-place manipulation and reach clips; 803 kept, 1.56 h.
+    - planner_v3 (`generate_planner_motions.py --profile demo`): mostly idle / slow walk; more starts, stops, turns in place and reversals; 2.4 h.
+  - Upper-body grafting on planner clips (`upper_body_augment_prefixes: ["planner_"]`).
+  - Robustness terms:
+    - measured R1 armature ±30 %;
+    - #51 joint friction ×0.75–2.0 (`joint_friction.py`);
+    - PD gains ×0.9–1.1;
+    - 0–20 ms actuation latency.
+  - Uniform eval every 1000 iterations; per-clip outcomes in `<run>/eval/iteration_*.json`.
+  - Run directory `sonic_r1_dex3_teleop_robust_stage_bplus-20260925_011642`. Two earlier launches crashed:
+    - `EventCfg` rejected the new event terms, fixed by `R1RobustEventCfg`;
+    - CUDA OOM while loading the second eval pass, fixed with `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`.
+  - **Iteration-1 eval** (A2 weights under B+'s randomization, on all 1875 clips): 0.719 overall, planner 0.56, mocap 0.794; MPJPE-L 32.0 mm, VR 3-point 25.5 mm.
+  - No joint locks up, so Isaac Sim 5.1 applies the friction as a torque, not as a coefficient × reaction force.
+- [x] **Q1 ONNX export without Isaac** (`scripts/r1/export_teleop_onnx.py`, `sonic-train` env, CPU):
+  - Rebuilds the actor from the run config + `layouts/r1_dex3_teleop/layout.json` and calls SONIC's exporter.
+  - Writes `<run>/exported/<name>.{onnx,json}`: 1047 inputs = tokenizer 267 + actor 780.
+  - **G0 passed**: `scripts/r1/teleop/policy.py --check` gives max |ONNX − training forward| 4.2e-6 over 64 random observations.
+  - The motion library's reference equals the clip joint angles in MuJoCo→Isaac order (`R1_MUJOCO_TO_ISAACLAB_DOF` indexing) with 50 Hz forward-difference velocities (2e-7).
+- [~] **Q2 MuJoCo sim-to-sim (gate G1)**.
+  - Tools:
+    - `scripts/r1/export_r1_reference.py`: motion lib → `.npz`; `data/r1_reference/eval100` holds 50 planner + 50 mocap clips of B.
+    - `scripts/r1/teleop/{observations,robot_mujoco,play_clips}.py`: runtime observation builder, PD plant at 1 kHz, the training terminations.
+  - A2 iteration 2000 on eval100 (per-clip results in `logs_rl/sim2sim/`):
+    - nominal actuators: 81 % (planner 78, mocap 84), MPJPE-L 29 mm;
+    - #51 actuators (armature + friction): 76 % (planner 70, mocap 82).
+  - Failures:
+    - planner: foot position on the new v3 turn/start-stop clips;
+    - mocap: wrist height on reaching up/far.
+  - Same 100 clips, Isaac with B+'s randomization (iteration-1 eval JSON): 61 %. MuJoCo does not do worse than Isaac on this checkpoint:
+    - with nominal actuators, 24 clips pass only in MuJoCo and 4 only in Isaac;
+    - with #51 actuators, 23 only in MuJoCo and 8 only in Isaac.
+- [~] **Q3 Runtime with the Quest** (`scripts/r1/teleop/`; operator guide `docs/r1/QUEST_TELEOP.md`; conda env `r1rt` from `requirements.txt`).
+  - **Planner.** `reference.py` + `planner_loop.AsyncPlannerLoop`:
+    - the planner runs on a worker thread and a late plan skips its elapsed frames;
+    - on the TITAN V it takes 18 ms per call, merging within LOOK_AHEAD = 2 ticks; on CPU, 60–80 ms (too slow);
+    - the TITAN V needs cuDNN 9.5; newer versions fail on sm_70;
+    - `LegMap` reproduces the training clips exactly (test).
+  - **Targets.** `targets.py`:
+    - calibration at A + X fixes the operator frame (heading + poses);
+    - hand displacements relative to the headset × 0.65;
+    - controller rotations since calibration are applied in the world frame;
+    - head yaw/roll clamped onto the waist;
+    - a damped-least-squares IK projects everything onto the R1's 5-DOF arms (1.5 ms).
+  - **Quest.** `quest.py` wraps televuer (WebXR, pass-through). The server answers on `https://<pc>:8012`; it needed `params-proto<3`.
+  - **Recording.** `run.py --record` / `--input replay:`. On CPU the replay is bit-identical.
+  - **Closed loop in MuJoCo**, #51 actuators, 10 ms delay, A2 iteration 2000, scripted operator:
+    - 60 s real time with forward walk / stop / turn in place / sidestep / back + waving: no fall;
+    - palm error p50 55 mm, p95 91 mm; standing on the default targets, the palms sit 2–5 cm forward of the target;
+    - policy 1.3 ms on the TITAN V.
+  - Open: the live-Quest part of gate G2 (needs the operator).
+- [~] **Q4 Real-robot interface.**
+  - `robot_unitree.py`: `rt/lowcmd` / `rt/lowstate` in a child process (500 Hz; Python deserialization costs 0.5 ms per message, which starved the policy loop of the GIL in-process).
+    - Motor slots from Unitree's R1 `JointIndex` (unitree_sdk2 `dds_wrapper/robots/r1/defines.h`): legs 0–11, **waist roll 12, yaw 13** (no swap, unlike G1), left arm 15–19, right arm 22–26, **head 29/30**.
+    - The head is held at 0.
+  - `safety.py` watchdog. `run.py` phases: damping → stand-up 3 s → hold → A + X → shadow → blend 2 s → run.
+  - `dds_sim.py`: MuJoCo behind the same DDS topics, with a gantry band. On loopback, discovery uses a unicast peer.
+  - **DDS closed loop:** 45 s of stand-up, shadow, blend, walking + reaching, gantry released at 9 s. No trips; tick period p50 20.0 ms, p95 21.0 ms, max 23.2 ms; max tilt 12°.
+  - Open: the hardware checks (`robot_unitree.py --check`), a Dex3 hold pose.
+- [ ] **Q5** Real-robot bring-up and demo takes.
+
 ---
 
 ## 3. Facts the plan rests on (verified unless marked VERIFY)
@@ -449,6 +524,16 @@ caveat (position tracked strongly; orientation reduced to palm-normal).
   PD gains x0.9-1.1 and 0-15 ms actuation latency (`delayed_actions.py`) are applied as a
   fine-tune from A2 (`sonic_r1_dex3_teleop_robust.yaml`) so their effect on `eval/` is
   measurable; joint friction waits until its Isaac Sim 5.1 units are verified.
+- **D16 One final run for the real-robot demo** (superseded D15's staging; plan of 2026-09-25).
+  - With one GPU and the robot needed on days 3–4, the remaining GPU time goes to the configuration that ships: B+ = robustness terms + grafting + S1 + planner v3, from A2's best checkpoint. A2 is the baseline and the fallback.
+  - The #51 fit comes from a comment by a user who measured one R1, not from Unitree. Per group (armature / friction N m):
+    - legs and waist 0.05 / 2.5;
+    - ankles 0.10 / 1.5;
+    - shoulder pitch/roll 0.01 / 2.5;
+    - shoulder yaw, elbow, wrist roll 0.01 / 0.2.
+  - Upward friction randomization, because unloaded backdriving under-measures loaded legs. The commenter's sim-trained policy walked on the real R1 on the first try.
+  - Friction goes in as Isaac Sim 5 static = dynamic efforts. The one-joint unit test (`scripts/r1/isaac_joint_friction_test.py`) hung at startup. Instead, B+'s iteration-1 eval checks the units: a coefficient × joint reaction force would lock the legs.
+  - `EventCfg` only accepts declared terms, hence `mdp/r1_events.py:R1RobustEventCfg`.
 
 ## 7. Risks
 

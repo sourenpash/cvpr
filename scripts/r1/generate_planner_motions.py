@@ -11,6 +11,11 @@ joint-name transfer as the BONES-SEED data (``transfer_g1_motion_lib_to_r1.py``)
 
     python scripts/r1/generate_planner_motions.py --output data/motion_lib_r1/planner_v2 \
         --num-clips 200 --duration 20 --workers 6 --threads 2
+    python scripts/r1/generate_planner_motions.py --output data/motion_lib_r1/planner_v3 \
+        --profile demo --name planner_v3 --seed 3 --num-clips 400 --workers 8 --threads 2
+
+``--profile demo`` weights the scripts towards what the demo operator does: idle and slow walk,
+shorter segments (more starts and stops), turning in place and direction reversals.
 
 The planner's side-steps and turns exceed the R1's (and G1's) ankle-roll limit of 0.262 rad; the
 transfer clamps them, and the clips are kept by default because the deployed policy meets exactly
@@ -43,26 +48,52 @@ DIRECTIONS = [
 ]  # fmt: skip
 MODES = [(pl.IDLE, 0.25), (pl.SLOW_WALK, 0.40), (pl.WALK, 0.35)]
 
+# Stick-script statistics. "v2" reproduces planner_v2 exactly (same random stream).
+PROFILES = {
+    "v2": dict(
+        modes=MODES, directions=DIRECTIONS, segment_s=(1.5, 5.0), p_set_speed=0.5,
+        p_straight=0.55, p_reverse=0.0,
+    ),
+    # The Quest demo: mostly idle and slow walk, frequent starts/stops, turning in place (idle +
+    # right stick), reversals of the walking direction.
+    "demo": dict(
+        modes=[(pl.IDLE, 0.35), (pl.SLOW_WALK, 0.50), (pl.WALK, 0.15)],
+        directions=[
+            (0.0, 0.40), (np.pi, 0.15), (np.pi / 2, 0.10), (-np.pi / 2, 0.10),
+            (np.pi / 4, 0.0625), (-np.pi / 4, 0.0625), (3 * np.pi / 4, 0.0625),
+            (-3 * np.pi / 4, 0.0625),
+        ],
+        segment_s=(1.0, 4.0), p_set_speed=0.7, p_straight=0.5, p_reverse=0.25,
+    ),
+}  # fmt: skip
+
 
 def _choice(rng, options):
     values, probs = zip(*options)
     return values[rng.choice(len(values), p=np.asarray(probs) / np.sum(probs))]
 
 
-def stick_script(rng: np.random.Generator, duration: float, dt: float = 0.02):
+def stick_script(rng: np.random.Generator, duration: float, dt: float = 0.02, profile: str = "v2"):
     """Yield one :class:`planner_loop.Command` per 50 Hz tick for ``duration`` seconds."""
+    prof = PROFILES[profile]
     facing, t = 0.0, 0.0
     first = True
+    last_direction, last_moving = None, False
     while t < duration:
-        seg = rng.uniform(1.0, 2.0) if first else rng.uniform(1.5, 5.0)
-        mode = pl.IDLE if first else _choice(rng, MODES)  # start from standing, like the demo
+        seg = rng.uniform(1.0, 2.0) if first else rng.uniform(*prof["segment_s"])
+        mode = pl.IDLE if first else _choice(rng, prof["modes"])  # start from standing
         first = False
-        direction = _choice(rng, DIRECTIONS)
+        direction = _choice(rng, prof["directions"])
+        if prof["p_reverse"] > 0 and last_moving and rng.random() < prof["p_reverse"]:
+            direction = last_direction + np.pi  # walk back the way it came
         band = pl.SPEED_BANDS.get(mode)
-        speed = float(rng.uniform(*band)) if band and rng.random() < 0.5 else -1.0
+        speed = float(rng.uniform(*band)) if band and rng.random() < prof["p_set_speed"] else -1.0
         yaw_rate = (
-            0.0 if rng.random() < 0.55 else float(rng.choice([-1, 1]) * rng.uniform(0.3, 1.5))
+            0.0
+            if rng.random() < prof["p_straight"]
+            else float(rng.choice([-1, 1]) * rng.uniform(0.3, 1.5))
         )
+        last_direction, last_moving = direction, mode != pl.IDLE
         for _ in range(int(round(seg / dt))):
             facing += yaw_rate * dt
             face = np.array([np.cos(facing), np.sin(facing), 0.0])
@@ -74,9 +105,11 @@ def stick_script(rng: np.random.Generator, duration: float, dt: float = 0.02):
             t += dt
 
 
-def generate_clip(loop_model: pl.PlannerModel, rng: np.random.Generator, duration: float) -> dict:
+def generate_clip(
+    loop_model: pl.PlannerModel, rng: np.random.Generator, duration: float, profile: str = "v2"
+) -> dict:
     loop = pl.PlannerLoop(loop_model)
-    frames = np.array([loop.tick(cmd) for cmd in stick_script(rng, duration)])
+    frames = np.array([loop.tick(cmd) for cmd in stick_script(rng, duration, profile=profile)])
     root_rot_xyzw = frames[:, [4, 5, 6, 3]]
     return {
         "root_trans_offset": frames[:, :3].astype(np.float32),
@@ -95,8 +128,8 @@ def _worker(job):
     for i in job["indices"]:
         rng = np.random.default_rng([job["seed"], i])  # independent of the worker split
         model.rng = np.random.default_rng([job["seed"], i, 1])
-        name = f"planner_v2_{job['seed']:03d}_{i:04d}"
-        g1 = generate_clip(model, rng, job["duration"])
+        name = f"{job['name']}_{job['seed']:03d}_{i:04d}"
+        g1 = generate_clip(model, rng, job["duration"], job["profile"])
         # The G1 clip too (motion_lib format), so the R1 transfer can be re-run without the planner:
         # transfer_g1_motion_lib_to_r1.py --input <output>_g1 --max-clamp-frac 1.0
         g1_entry = {k: g1[k] for k in ("root_trans_offset", "root_rot", "dof", "fps")}
@@ -121,6 +154,10 @@ def main() -> None:
     ap.add_argument("--num-clips", type=int, default=200)
     ap.add_argument("--duration", type=float, default=20.0, help="seconds per clip")
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--profile", choices=sorted(PROFILES), default="v2", help="stick statistics")
+    ap.add_argument(
+        "--name", default="planner_v2", help="clip-name prefix; keep 'planner_' (eval groups)"
+    )
     ap.add_argument(
         "--planner", type=Path, default=None, help="planner_sonic.onnx (default: HF cache)"
     )
@@ -131,6 +168,8 @@ def main() -> None:
     )
     ap.add_argument("--max-vel-frac", type=float, default=0.05)
     args = ap.parse_args()
+    if not args.name.startswith("planner_"):
+        ap.error("--name must start with 'planner_' (eval groups and upper-body grafting use it)")
 
     planner = str(args.planner or pl.find_planner_onnx())
     args.output.mkdir(parents=True, exist_ok=True)
@@ -140,7 +179,7 @@ def main() -> None:
             "indices": list(range(w, args.num_clips, args.workers)), "planner": planner,
             "threads": args.threads, "seed": args.seed, "duration": args.duration,
             "output": str(args.output), "max_clamp_frac": args.max_clamp_frac,
-            "max_vel_frac": args.max_vel_frac,
+            "max_vel_frac": args.max_vel_frac, "profile": args.profile, "name": args.name,
         }
         for w in range(args.workers)
     ]  # fmt: skip
@@ -151,6 +190,7 @@ def main() -> None:
     kept = [s for s in stats if not s["dropped"]]
     report = {
         "planner": planner,
+        "profile": args.profile,
         "num_clips": len(stats),
         "num_kept": len(kept),
         "kept_hours": sum(s["num_frames"] for s in kept) / 50.0 / 3600.0,
