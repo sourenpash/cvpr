@@ -115,15 +115,19 @@ class Command:
 class PlannerModel:
     """``planner_sonic.onnx`` (V2, 11 inputs) on onnxruntime."""
 
-    def __init__(self, onnx_path: str | Path, seed: int = 0, threads: int = 0):
+    def __init__(self, onnx_path: str | Path, seed: int = 0, threads: int = 0, device: str = "cpu"):
         import onnxruntime as ort
 
         options = ort.SessionOptions()
         if threads > 0:  # 0 = onnxruntime default (all cores); ~70 ms/call on 4 cores
             options.intra_op_num_threads, options.inter_op_num_threads = threads, 1
-        self.session = ort.InferenceSession(
-            str(onnx_path), options, providers=["CPUExecutionProvider"]
-        )
+        providers = ["CPUExecutionProvider"]
+        if device.startswith("cuda"):  # onnxruntime-gpu (r1rt env): ~18 ms on the TITAN V
+            if hasattr(ort, "preload_dlls"):  # CUDA / cuDNN from the nvidia-* pip wheels
+                ort.preload_dlls()
+            index = int(device.split(":")[1]) if ":" in device else 0
+            providers.insert(0, ("CUDAExecutionProvider", {"device_id": index}))
+        self.session = ort.InferenceSession(str(onnx_path), options, providers=providers)
         names = [i.name for i in self.session.get_inputs()]
         assert "allowed_pred_num_tokens" in names, f"expected a V1/V2 planner, got inputs {names}"
         self.k = self.session.get_inputs()[names.index("allowed_pred_num_tokens")].shape[1]
@@ -183,10 +187,17 @@ class PlannerLoop:
         interval = 0.1 if cmd.mode == RUN else 1.0
         return cmd.moving and self.since_replan >= interval - 1e-9
 
-    def _replan(self, cmd: Command) -> None:
+    def _context(self) -> tuple[int, np.ndarray]:
+        """Generation frame (LOOK_AHEAD ahead of the cursor) and the 4-frame 30 Hz context there."""
         gen = self.cur + LOOK_AHEAD
-        context = interpolate_qpos(self.motion, (gen / 50.0 + np.arange(4) / 30.0) * 50.0)
-        new = resample_30_to_50(self.model(context, cmd))
+        return gen, interpolate_qpos(self.motion, (gen / 50.0 + np.arange(4) / 30.0) * 50.0)
+
+    def _merge(self, new: np.ndarray, gen: int) -> None:
+        """Cross-fade the 50 Hz plan ``new`` (starting at buffer frame ``gen``) in from the cursor.
+
+        If the cursor has passed ``gen`` (an asynchronous plan arrived late), the plan's elapsed
+        frames are skipped and the cross-fade starts at the cursor.
+        """
         length = gen - self.cur + len(new)
         if length > 0:
             f = np.arange(length)
@@ -196,6 +207,10 @@ class PlannerLoop:
             out = (1.0 - w[:, None]) * self.motion[f_old] + w[:, None] * new[f_new]
             out[:, 3:7] = slerp(self.motion[f_old, 3:7], new[f_new, 3:7], w)
             self.motion, self.cur = out, 0
+
+    def _replan(self, cmd: Command) -> None:
+        gen, context = self._context()
+        self._merge(resample_30_to_50(self.model(context, cmd)), gen)
         self.last = cmd
         self.since_replan = 0.0
         self.num_replans += 1
@@ -210,6 +225,56 @@ class PlannerLoop:
         self.cur += 1
         self.ticks += 1
         return frame
+
+
+class AsyncPlannerLoop(PlannerLoop):
+    """The planner loop with the model call on a worker thread, as the deployed C++ loop runs it.
+
+    :meth:`tick` never blocks on the planner: a replan request takes its context at the cursor
+    plus LOOK_AHEAD and is merged on the first tick after the result arrives (late frames are
+    skipped, :meth:`PlannerLoop._merge`). Training references (``generate_planner_motions.py``)
+    were generated with an instantaneous planner, so keep the latency under LOOK_AHEAD ticks
+    (40 ms; a GPU planner takes a few ms). ``last_latency_ticks`` reports it; ``seeds`` logs the
+    planner's random seeds for replay.
+    """
+
+    def __init__(self, model: PlannerModel, joints: np.ndarray | None = None):
+        from concurrent.futures import ThreadPoolExecutor
+
+        super().__init__(model, joints)
+        self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="planner")
+        self._pending = None  # (future, gen, cmd, tick requested)
+        self.last_latency_ticks = 0
+        self.seeds: list[int] = []
+
+    def _plan(self, context: np.ndarray, cmd: Command, seed: int) -> np.ndarray:
+        return resample_30_to_50(self.model(context, cmd, seed=seed))
+
+    def tick(self, cmd: Command) -> np.ndarray:
+        if self._pending is not None and self._pending[0].done():
+            future, gen, _, requested = self._pending
+            self._pending = None
+            self._merge(future.result(), gen)  # raises the planner's exception, if any
+            self.last_latency_ticks = self.ticks - requested
+        if self.ticks % PLANNER_EVERY == 0:
+            if self._pending is None and self._needs_replan(cmd):
+                gen, context = self._context()
+                seed = int(self.model.rng.integers(0, 2**31 - 1))
+                self.seeds.append(seed)
+                future = self._pool.submit(self._plan, context, cmd, seed)
+                self._pending = (future, gen, cmd, self.ticks)
+                self.last = cmd
+                self.since_replan = 0.0
+                self.num_replans += 1
+            else:
+                self.since_replan += PLANNER_EVERY / 50.0
+        frame = self.motion[min(self.cur, len(self.motion) - 1)].copy()
+        self.cur += 1
+        self.ticks += 1
+        return frame
+
+    def close(self) -> None:
+        self._pool.shutdown(wait=True)
 
 
 def find_planner_onnx() -> Path:
