@@ -261,6 +261,11 @@ Task IDs (M = Mac-side, G = GPU-box) are referenced from §5.
   - Launched 19:22 from B+ iteration 5000 (`r1_init/teleop_bplus_it5000.pt`) on `data/motion_lib_r1/B2` (adds S2 gesture mocap and Kimodo), with the semi-closed hand model; 9.2 s per iteration.
   - Evals at 500 and 1000, then every 1000.
   - Robot candidate until B4 beats it: B+ iteration 4500 with the calm runtime.
+  - **Iteration 500:**
+    - Isaac eval 0.843 vs B+ 0.845: planner 0.717 vs 0.752, mocap 0.868 vs 0.859, Kimodo 0.977 vs 0.977.
+    - Real gesture clips (S2, 628): 0.839 vs 0.763 — wave 0.62 vs 0.51, point 0.82 vs 0.64, greet 0.99 vs 0.96, clap 0.92 vs 0.89.
+    - MuJoCo gate (`gate_b4_it500.json`): clips 0.81 vs 0.83; leg MPJPE 30.2 vs 31.6 mm; VR 3-point 38.9 vs 39.9 mm; arms above 5 Hz 0.116 vs 0.102 rad/s; no falls, no unplanned steps.
+    - G0 on the export: 2.9e-6.
 
 ---
 
