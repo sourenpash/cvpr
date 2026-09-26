@@ -266,6 +266,18 @@ Task IDs (M = Mac-side, G = GPU-box) are referenced from §5.
     - Real gesture clips (S2, 628): 0.839 vs 0.763 — wave 0.62 vs 0.51, point 0.82 vs 0.64, greet 0.99 vs 0.96, clap 0.92 vs 0.89.
     - MuJoCo gate (`gate_b4_it500.json`): clips 0.81 vs 0.83; leg MPJPE 30.2 vs 31.6 mm; VR 3-point 38.9 vs 39.9 mm; arms above 5 Hz 0.116 vs 0.102 rad/s; no falls, no unplanned steps.
     - G0 on the export: 2.9e-6.
+  - **Iteration 1000: the robot candidate** (with the calm runtime; B+ iteration 4500 is the fallback).
+    - Isaac eval 0.876 vs B+ 0.845:
+      - real gestures (S2) 0.908 vs 0.763; wave 0.78 vs 0.51, point 0.88 vs 0.64;
+      - other mocap 0.909 vs 0.907; Kimodo 0.972 vs 0.977;
+      - walking clips 0.737 vs 0.752.
+    - MuJoCo gate (`gate_b4_it1000.json`):
+      - clips 0.83 (planner 0.72, mocap 0.94), equal to B+;
+      - leg MPJPE 30.2 vs 31.6 mm; VR 3-point 38.8 vs 39.9 mm;
+      - more jitter than B+ with the same runtime: arms 0.116 vs 0.102 rad/s, legs 0.242 vs 0.194;
+      - no falls, no unplanned steps, 1.1 mm standing drift;
+      - standing palm offset 37 vs 24 mm.
+    - G0 2.0e-6. Export: `<run>/exported/sonic_r1_dex3_teleop_robust_stage_b4-20260925_192255_model_step_001000.onnx`.
 
 ---
 
